@@ -1,0 +1,10 @@
+target/
+.git/
+.github/
+.gitignore
+.env
+config/config.toml
+config.toml
+*.log
+*.tmp
+scratch/

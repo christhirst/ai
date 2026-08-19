@@ -1,2 +1,22 @@
-# Copy this file to config.toml and insert your Gemini API key
+# Gemini API Key (can also be set via GEMINI_API_KEY environment variable)
 gemini_api_key = "YOUR_GEMINI_API_KEY_HERE"
+
+# Model selection (e.g. gemini-3.5-flash-lite, gemini-2.0-flash, etc.)
+model = "gemini-3.5-flash-lite"
+
+# Model temperature (0.0 to 2.0)
+temperature = 0.0
+
+# System preamble / instructions
+preamble = "You are a helpful assistant."
+
+# Variant to run with default 'cargo run' (options: "normal", "typed", "all")
+variant = "typed"
+
+# Configuration for normal prompt variant
+[prompt]
+query = "Hello! Tell me a one-sentence joke about programming."
+
+# Configuration for typed prompt variant
+[prompt_typed]
+query = "Give me the GDP of Germany for each year 1990 to 2025"

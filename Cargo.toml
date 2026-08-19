@@ -2,9 +2,31 @@
 name = "ai"
 version = "0.1.0"
 edition = "2024"
+default-run = "ai"
+
+[lib]
+name = "ai"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ai"
+path = "src/main.rs"
+
+[[bin]]
+name = "prompt"
+path = "src/bin/prompt.rs"
+
+[[bin]]
+name = "prompt_typed"
+path = "src/bin/prompt_typed.rs"
 
 [dependencies]
 rig = "0.41.0"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
 config = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"

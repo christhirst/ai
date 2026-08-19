@@ -1,29 +1,28 @@
-use config::Config;
-use rig::prelude::*;
-use rig::providers::gemini;
+use ai::config::{AppConfig, ExecutionVariant};
+use ai::{prompt, prompt_typed};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = Config::builder()
-        .add_source(config::File::with_name("config/config").required(false))
-        .add_source(config::File::with_name("config").required(false))
-        .add_source(config::Environment::default())
-        .build()?;
+    tracing_subscriber::fmt::init();
+    let config = AppConfig::load()?;
 
-    let api_key = settings.get_string("gemini_api_key")?;
+    println!("Configuration loaded successfully.");
+    println!("Selected Variant: {}\n", config.variant);
 
-    let client = gemini::Client::new(&api_key)?;
-
-    /* let model_list = client.list_models().await?;
-    println!("Model list: {:?}", model_list); */
-
-    let agent = client
-        .agent("gemini-3.5-flash-lite")
-        .preamble("You are a helpful assistant.")
-        .build();
-
-    let response = agent.prompt("Hello! Tell me a one-sentence joke.").await?;
-    println!("Agent response: {}", response);
+    match config.variant {
+        ExecutionVariant::Normal => {
+            prompt::run(&config).await?;
+        }
+        ExecutionVariant::Typed => {
+            prompt_typed::run(&config).await?;
+        }
+        ExecutionVariant::All => {
+            println!("=== Variant 1: Normal Prompt ===");
+            prompt::run(&config).await?;
+            println!("\n=== Variant 2: Typed Prompt ===");
+            prompt_typed::run(&config).await?;
+        }
+    }
 
     Ok(())
 }
