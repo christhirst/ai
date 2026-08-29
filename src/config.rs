@@ -92,11 +92,11 @@ fn default_db_endpoint() -> String {
 }
 
 fn default_db_namespace() -> String {
-    "ai".to_string()
+    "data".to_string()
 }
 
 fn default_db_database() -> String {
-    "records".to_string()
+    "ai".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -147,8 +147,61 @@ impl AppConfig {
             .add_source(Environment::with_prefix("APP").separator("_"))
             .add_source(Environment::default());
 
-        let config = builder.build()?;
-        config.try_deserialize::<AppConfig>()
+        let mut config: AppConfig = builder.build()?.try_deserialize()?;
+
+        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+            if !key.trim().is_empty() {
+                config.gemini_api_key = key;
+            }
+        }
+
+        if let Ok(pass) = std::env::var("SURREAL_PASS")
+            .or_else(|_| std::env::var("SURREALDB_PASS"))
+            .or_else(|_| std::env::var("DB_PASSWORD"))
+        {
+            if !pass.trim().is_empty() {
+                config.db.password = Some(pass);
+            }
+        }
+
+        if let Ok(user) = std::env::var("SURREAL_USER")
+            .or_else(|_| std::env::var("SURREALDB_USER"))
+            .or_else(|_| std::env::var("DB_USERNAME"))
+            .or_else(|_| std::env::var("DB_USER"))
+        {
+            if !user.trim().is_empty() {
+                config.db.username = Some(user);
+            }
+        }
+
+        if let Ok(endpoint) = std::env::var("SURREAL_URL")
+            .or_else(|_| std::env::var("SURREALDB_URL"))
+            .or_else(|_| std::env::var("DB_ENDPOINT"))
+        {
+            if !endpoint.trim().is_empty() {
+                config.db.endpoint = endpoint;
+            }
+        }
+
+        if let Ok(ns) = std::env::var("SURREAL_NS")
+            .or_else(|_| std::env::var("SURREALDB_NS"))
+            .or_else(|_| std::env::var("DB_NAMESPACE"))
+        {
+            if !ns.trim().is_empty() {
+                config.db.namespace = ns;
+            }
+        }
+
+        if let Ok(db) = std::env::var("SURREAL_DB")
+            .or_else(|_| std::env::var("SURREALDB_DB"))
+            .or_else(|_| std::env::var("DB_DATABASE"))
+        {
+            if !db.trim().is_empty() {
+                config.db.database = db;
+            }
+        }
+
+        Ok(config)
     }
 }
 
@@ -187,8 +240,8 @@ query = "Give GDP data"
         assert_eq!(config.prompt.query, "Say hi");
         assert_eq!(config.prompt_typed.query, "Give GDP data");
         assert_eq!(config.db.endpoint, "mem://");
-        assert_eq!(config.db.namespace, "ai");
-        assert_eq!(config.db.database, "records");
+        assert_eq!(config.db.namespace, "data");
+        assert_eq!(config.db.database, "ai");
     }
 
     #[test]

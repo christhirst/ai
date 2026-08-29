@@ -4,7 +4,7 @@ pub mod prompt;
 pub mod prompt_typed;
 
 pub use config::{AppConfig, DatabaseConfig, ExecutionVariant, PromptConfig, PromptTypedConfig};
-pub use db::{AnyDb, LocalDb};
+pub use db::{AppDb, LocalDb};
 pub use prompt_typed::{GdpRecord, Homecides};
 use rig::providers::gemini;
 

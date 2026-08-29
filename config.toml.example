@@ -25,8 +25,8 @@ query = "Give me the GDP of Germany for each year 1990 to 2025"
 [db]
 # Endpoint: "mem://" for in-memory embedded DB, or "ws://localhost:8000" / "http://localhost:8000"
 endpoint = "mem://"
-namespace = "ai"
-database = "records"
+namespace = "data"
+database = "ai"
 # username = "root"
 # password = "root"
 
