@@ -2,6 +2,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// TODO: Refactor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ExecutionVariant {
@@ -61,6 +62,44 @@ fn default_typed_query() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DatabaseConfig {
+    #[serde(default = "default_db_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_db_namespace")]
+    pub namespace: String,
+    #[serde(default = "default_db_database")]
+    pub database: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_db_endpoint(),
+            namespace: default_db_namespace(),
+            database: default_db_database(),
+            username: None,
+            password: None,
+        }
+    }
+}
+
+fn default_db_endpoint() -> String {
+    "mem://".to_string()
+}
+
+fn default_db_namespace() -> String {
+    "ai".to_string()
+}
+
+fn default_db_database() -> String {
+    "records".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub gemini_api_key: String,
     #[serde(default = "default_model")]
@@ -75,6 +114,8 @@ pub struct AppConfig {
     pub prompt: PromptConfig,
     #[serde(default)]
     pub prompt_typed: PromptTypedConfig,
+    #[serde(default)]
+    pub db: DatabaseConfig,
 }
 
 fn default_model() -> String {
@@ -98,6 +139,9 @@ impl AppConfig {
             .set_default("variant", "typed")?
             .set_default("prompt.query", default_prompt_query())?
             .set_default("prompt_typed.query", default_typed_query())?
+            .set_default("db.endpoint", default_db_endpoint())?
+            .set_default("db.namespace", default_db_namespace())?
+            .set_default("db.database", default_db_database())?
             .add_source(File::with_name("config/config").required(false))
             .add_source(File::with_name("config").required(false))
             .add_source(Environment::with_prefix("APP").separator("_"))
@@ -142,5 +186,34 @@ query = "Give GDP data"
         assert_eq!(config.variant, ExecutionVariant::Normal);
         assert_eq!(config.prompt.query, "Say hi");
         assert_eq!(config.prompt_typed.query, "Give GDP data");
+        assert_eq!(config.db.endpoint, "mem://");
+        assert_eq!(config.db.namespace, "ai");
+        assert_eq!(config.db.database, "records");
+    }
+
+    #[test]
+    fn test_deserialize_config_with_custom_db() {
+        let toml_str = r#"
+gemini_api_key = "test_key_123"
+
+[db]
+endpoint = "ws://localhost:8000"
+namespace = "production"
+database = "analytics"
+username = "root"
+password = "secretpassword"
+"#;
+
+        let c = Config::builder()
+            .add_source(File::from_str(toml_str, FileFormat::Toml))
+            .build()
+            .unwrap();
+        let config: AppConfig = c.try_deserialize().unwrap();
+
+        assert_eq!(config.db.endpoint, "ws://localhost:8000");
+        assert_eq!(config.db.namespace, "production");
+        assert_eq!(config.db.database, "analytics");
+        assert_eq!(config.db.username.as_deref(), Some("root"));
+        assert_eq!(config.db.password.as_deref(), Some("secretpassword"));
     }
 }

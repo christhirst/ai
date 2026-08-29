@@ -20,3 +20,13 @@ query = "Hello! Tell me a one-sentence joke about programming."
 # Configuration for typed prompt variant
 [prompt_typed]
 query = "Give me the GDP of Germany for each year 1990 to 2025"
+
+# SurrealDB database configuration
+[db]
+# Endpoint: "mem://" for in-memory embedded DB, or "ws://localhost:8000" / "http://localhost:8000"
+endpoint = "mem://"
+namespace = "ai"
+database = "records"
+# username = "root"
+# password = "root"
+

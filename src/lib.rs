@@ -1,9 +1,11 @@
 pub mod config;
+pub mod db;
 pub mod prompt;
 pub mod prompt_typed;
 
-pub use config::{AppConfig, ExecutionVariant, PromptConfig, PromptTypedConfig};
-pub use prompt_typed::GdpRecord;
+pub use config::{AppConfig, DatabaseConfig, ExecutionVariant, PromptConfig, PromptTypedConfig};
+pub use db::{AnyDb, LocalDb};
+pub use prompt_typed::{GdpRecord, Homecides};
 use rig::providers::gemini;
 
 /// Creates a Gemini client configured with the given API key.

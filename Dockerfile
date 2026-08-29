@@ -15,16 +15,7 @@ RUN cargo build --release
 # ------------------------------------------------------------------------------
 # Runtime Stage
 # ------------------------------------------------------------------------------
-FROM docker.io/library/debian:bookworm-slim AS runtime
-
-# Install CA certificates for HTTPS/TLS requests to Gemini API
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root system user
-RUN useradd -m -u 1000 -U appuser
+FROM gcr.io/distroless/cc-debian12 AS runtime
 
 WORKDIR /app
 
@@ -34,12 +25,9 @@ COPY --from=builder /usr/src/app/target/release/prompt /usr/local/bin/prompt
 COPY --from=builder /usr/src/app/target/release/prompt_typed /usr/local/bin/prompt_typed
 
 # Copy default example configuration
-COPY config.toml.example /app/config.toml.example
+COPY --chown=nonroot:nonroot config.toml.example /app/config.toml.example
 
-# Set directory permissions for non-root user
-RUN chown -R appuser:appuser /app
-
-USER appuser
+USER nonroot:nonroot
 
 ENV RUST_LOG=info
 
