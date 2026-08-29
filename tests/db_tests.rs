@@ -36,6 +36,11 @@ async fn test_db_initialization() {
 
 #[tokio::test]
 async fn test_app_config_db_loading() {
+    if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("APP_GEMINI_API_KEY").is_err() {
+        unsafe {
+            std::env::set_var("GEMINI_API_KEY", "test_key");
+        }
+    }
     let config = AppConfig::load().expect("Failed to load AppConfig");
     assert_eq!(config.db.endpoint, "mem://");
     assert_eq!(config.db.namespace, "ai");

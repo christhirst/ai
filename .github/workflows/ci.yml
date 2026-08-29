@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  GEMINI_API_KEY: test_dummy_ci_key
+
 
 jobs:
   lint-and-format:
