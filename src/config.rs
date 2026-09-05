@@ -100,6 +100,31 @@ fn default_db_database() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GrpcConfig {
+    #[serde(default = "default_grpc_host")]
+    pub host: String,
+    #[serde(default = "default_grpc_port")]
+    pub port: u16,
+}
+
+impl Default for GrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: default_grpc_host(),
+            port: default_grpc_port(),
+        }
+    }
+}
+
+fn default_grpc_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_grpc_port() -> u16 {
+    50051
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub gemini_api_key: String,
     #[serde(default = "default_model")]
@@ -116,6 +141,8 @@ pub struct AppConfig {
     pub prompt_typed: PromptTypedConfig,
     #[serde(default)]
     pub db: DatabaseConfig,
+    #[serde(default)]
+    pub grpc: GrpcConfig,
 }
 
 fn default_model() -> String {
@@ -142,6 +169,8 @@ impl AppConfig {
             .set_default("db.endpoint", default_db_endpoint())?
             .set_default("db.namespace", default_db_namespace())?
             .set_default("db.database", default_db_database())?
+            .set_default("grpc.host", default_grpc_host())?
+            .set_default("grpc.port", default_grpc_port() as i64)?
             .add_source(File::with_name("config/config").required(false))
             .add_source(File::with_name("config").required(false))
             .add_source(Environment::with_prefix("APP").separator("_"))
@@ -201,6 +230,18 @@ impl AppConfig {
             }
         }
 
+        if let Ok(host) = std::env::var("GRPC_HOST").or_else(|_| std::env::var("APP_GRPC_HOST")) {
+            if !host.trim().is_empty() {
+                config.grpc.host = host;
+            }
+        }
+
+        if let Ok(port_str) = std::env::var("GRPC_PORT").or_else(|_| std::env::var("APP_GRPC_PORT")) {
+            if let Ok(port) = port_str.parse::<u16>() {
+                config.grpc.port = port;
+            }
+        }
+
         Ok(config)
     }
 }
@@ -224,6 +265,10 @@ query = "Say hi"
 
 [prompt_typed]
 query = "Give GDP data"
+
+[grpc]
+host = "0.0.0.0"
+port = 50052
 "#;
 
         let c = Config::builder()
@@ -242,6 +287,8 @@ query = "Give GDP data"
         assert_eq!(config.db.endpoint, "mem://");
         assert_eq!(config.db.namespace, "data");
         assert_eq!(config.db.database, "ai");
+        assert_eq!(config.grpc.host, "0.0.0.0");
+        assert_eq!(config.grpc.port, 50052);
     }
 
     #[test]
@@ -268,5 +315,7 @@ password = "secretpassword"
         assert_eq!(config.db.database, "analytics");
         assert_eq!(config.db.username.as_deref(), Some("root"));
         assert_eq!(config.db.password.as_deref(), Some("secretpassword"));
+        assert_eq!(config.grpc.host, "127.0.0.1");
+        assert_eq!(config.grpc.port, 50051);
     }
 }

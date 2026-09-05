@@ -7,6 +7,7 @@ pub trait DbWritable {
     fn create_homecides(&self, records: &[Homecides]) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
     fn create_gdp(&self, record: &GdpRecord) -> impl std::future::Future<Output = Result<Option<GdpRecord>, Box<dyn std::error::Error>>> + Send;
     fn create_gdps(&self, records: &[GdpRecord]) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
+    fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> impl std::future::Future<Output = Result<Vec<serde_json::Value>, Box<dyn std::error::Error>>> + Send;
 }
 
 impl<C: Connection + Send + Sync> DbWritable for Surreal<C> {
@@ -27,6 +28,14 @@ impl<C: Connection + Send + Sync> DbWritable for Surreal<C> {
 
     async fn create_gdps(&self, records: &[GdpRecord]) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
         let res = self.insert(TABLE_GDP).content(records.to_vec()).await?;
+        Ok(res)
+    }
+
+    async fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+        let res: Vec<serde_json::Value> = self.insert(table).content(records.to_vec()).await?;
         Ok(res)
     }
 }
@@ -110,6 +119,22 @@ impl DbWritable for AppDb {
             }
         }
     }
+
+    async fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        match self {
+            AppDb::Local(local) => local.create_dynamic_records(table, records).await,
+            AppDb::Remote(remote) => {
+                if records.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let data_json = serde_json::to_string(records)?;
+                let sql = format!("INSERT INTO {table} {data_json};");
+                let res = remote.query_raw(&sql).await?;
+                let items: Vec<serde_json::Value> = serde_json::from_value(res).unwrap_or_default();
+                Ok(items)
+            }
+        }
+    }
 }
 
 /// Creates a single `GdpRecord` in the database.
@@ -142,4 +167,13 @@ pub async fn create_homecide_records<T: DbWritable>(
     records: &[Homecides],
 ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
     db.create_homecides(records).await
+}
+
+/// Inserts dynamic/generic JSON records in bulk into the specified database table.
+pub async fn insert_dynamic_records<T: DbWritable>(
+    db: &T,
+    table: &str,
+    records: &[serde_json::Value],
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    db.create_dynamic_records(table, records).await
 }

@@ -1,8 +1,8 @@
 # Gemini API Key (can also be set via GEMINI_API_KEY environment variable)
 gemini_api_key = "YOUR_GEMINI_API_KEY_HERE"
 
-# Model selection (e.g. gemini-3.5-flash-lite, gemini-2.0-flash, etc.)
-model = "gemini-3.5-flash-lite"
+# Model selection (e.g. gemini-3.7-flash, gemini-3.5-flash-lite, etc.)
+model = "gemini-3.7-flash"
 
 # Model temperature (0.0 to 2.0)
 temperature = 0.0
@@ -30,3 +30,7 @@ database = "ai"
 # username = "root"
 # password = "root"
 
+# Tonic gRPC Server configuration
+[grpc]
+host = "127.0.0.1"
+port = 50051

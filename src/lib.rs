@@ -1,10 +1,15 @@
 pub mod config;
 pub mod db;
+pub mod grpc;
 pub mod prompt;
 pub mod prompt_typed;
 
-pub use config::{AppConfig, DatabaseConfig, ExecutionVariant, PromptConfig, PromptTypedConfig};
+pub use config::{AppConfig, DatabaseConfig, ExecutionVariant, GrpcConfig, PromptConfig, PromptTypedConfig};
 pub use db::{AppDb, LocalDb};
+pub use grpc::{
+    connect_client, start_grpc_server, AgentGrpcClient, PopulateTableRequest, PopulateTableResponse,
+    TablePopulatorService, TablePopulatorServiceServer, TablePopulatorServiceImpl,
+};
 pub use prompt_typed::{GdpRecord, Homecides};
 use rig::providers::gemini;
 
