@@ -359,3 +359,87 @@ async fn test_env_var_credential_overrides() {
         std::env::remove_var("GEMINI_API_KEY");
     }
 }
+
+#[test]
+fn test_normalize_base_url() {
+    use ai::db::normalize_base_url;
+
+    assert_eq!(normalize_base_url("wss://app.ux-ti.com/rpc"), "https://app.ux-ti.com");
+    assert_eq!(normalize_base_url("wss://app.ux-ti.com/rpc/"), "https://app.ux-ti.com");
+    assert_eq!(normalize_base_url("ws://localhost:8000/rpc"), "http://localhost:8000");
+    assert_eq!(normalize_base_url("ws://localhost:8000"), "http://localhost:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000/sql"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("https://app.ux-ti.com"), "https://app.ux-ti.com");
+    assert_eq!(normalize_base_url("https://app.ux-ti.com/sql"), "https://app.ux-ti.com");
+}
+
+#[tokio::test]
+async fn test_app_surrealdb_env_vars() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("SURREAL_PASS");
+        std::env::remove_var("SURREAL_USER");
+        std::env::set_var("APP_SURREALDB_PASS", "app_pass_test");
+        std::env::set_var("APP_SURREALDB_USER", "app_user_test");
+        std::env::set_var("GEMINI_API_KEY", "test_key");
+    }
+
+    let config = AppConfig::load().expect("Failed to load config with APP_SURREALDB env vars");
+    assert_eq!(config.db.password.as_deref(), Some("app_pass_test"));
+    assert_eq!(config.db.username.as_deref(), Some("app_user_test"));
+
+    unsafe {
+        std::env::remove_var("APP_SURREALDB_PASS");
+        std::env::remove_var("APP_SURREALDB_USER");
+    }
+}
+
+#[tokio::test]
+async fn test_db_check_auth_local() {
+    let mem_config = DatabaseConfig {
+        endpoint: "mem://".to_string(),
+        namespace: "data".to_string(),
+        database: "ai".to_string(),
+        username: None,
+        password: None,
+    };
+    let db = init_db_from_config(&mem_config).await.expect("Local DB check_auth should succeed");
+    assert!(db.check_auth().await.is_ok());
+}
+
+#[test]
+fn test_strip_null_fields() {
+    use ai::db::write::strip_null_fields;
+    let input = serde_json::json!({
+        "url": "https://example.com/crime-report",
+        "crime_id": null,
+        "nested": {
+            "status": "Pending",
+            "notes": null
+        },
+        "tags": [1, null, "test"]
+    });
+    let output = strip_null_fields(&input);
+    assert_eq!(
+        output,
+        serde_json::json!({
+            "url": "https://example.com/crime-report",
+            "nested": {
+                "status": "Pending"
+            },
+            "tags": [1, null, "test"]
+        })
+    );
+}
+
+#[test]
+fn test_coerce_surrealql_literals() {
+    use ai::db::write::coerce_surrealql_literals;
+    let json_str = r#"[{"fetched_at":"2026-09-06T14:08:00Z","incident_date":"2000-02-20","url":"https://example.com"}]"#;
+    let coerced = coerce_surrealql_literals(json_str);
+    assert_eq!(
+        coerced,
+        r#"[{"fetched_at":<datetime>'2026-09-06T14:08:00Z',"incident_date":<datetime>'2000-02-20',"url":"https://example.com"}]"#
+    );
+}

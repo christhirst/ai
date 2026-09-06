@@ -19,7 +19,6 @@ pub async fn run(config: &AppConfig) -> Result<String, Box<dyn std::error::Error
     let agent = builder.build();
 
     println!("Model: {}", config.model);
-    println!("Prompt: {}", config.prompt.query);
     println!("Sending request to Gemini...");
 
     let response = agent.prompt(&config.prompt.query).await?;

@@ -102,7 +102,7 @@ pub async fn set_table_comment<T: SchemaIntrospectable>(
     comment: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let escaped = comment.replace('\\', "\\\\").replace('\'', "\\'");
-    let sql = format!("DEFINE TABLE OVERWRITE {table} SCHEMAFULL COMMENT '{escaped}';");
+    let sql = format!("DEFINE TABLE OVERWRITE {table} COMMENT '{escaped}';");
     db.execute_query(&sql).await?;
     Ok(())
 }
@@ -113,6 +113,7 @@ pub struct TableSchemaSummary {
     pub table_name: String,
     pub comment: String,
     pub fields: Vec<String>,
+    pub field_names: Vec<String>,
     pub raw_info: serde_json::Value,
 }
 
@@ -125,8 +126,10 @@ pub async fn get_table_schema_summary<T: SchemaIntrospectable>(
     let db_info = db.db_info().await?;
 
     let mut fields = Vec::new();
+    let mut field_names = Vec::new();
     if let Some(fields_obj) = raw_info.get("fields").and_then(|f| f.as_object()) {
         for (field_name, field_val) in fields_obj {
+            field_names.push(field_name.clone());
             if let Some(def_str) = field_val.as_str() {
                 fields.push(format!("{field_name} ({def_str})"));
             } else {
@@ -152,6 +155,7 @@ pub async fn get_table_schema_summary<T: SchemaIntrospectable>(
         table_name: table.to_string(),
         comment,
         fields,
+        field_names,
         raw_info,
     })
 }

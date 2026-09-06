@@ -35,7 +35,8 @@ impl<C: Connection + Send + Sync> DbWritable for Surreal<C> {
         if records.is_empty() {
             return Ok(Vec::new());
         }
-        let res: Vec<serde_json::Value> = self.insert(table).content(records.to_vec()).await?;
+        let cleaned: Vec<serde_json::Value> = records.iter().map(strip_null_fields).collect();
+        let res: Vec<serde_json::Value> = self.insert(table).content(cleaned).await?;
         Ok(res)
     }
 }
@@ -127,13 +128,42 @@ impl DbWritable for AppDb {
                 if records.is_empty() {
                     return Ok(Vec::new());
                 }
-                let data_json = serde_json::to_string(records)?;
-                let sql = format!("INSERT INTO {table} {data_json};");
+                let cleaned: Vec<serde_json::Value> = records.iter().map(strip_null_fields).collect();
+                let data_json = serde_json::to_string(&cleaned)?;
+                let coerced_json = coerce_surrealql_literals(&data_json);
+                let sql = format!("INSERT INTO {table} {coerced_json};");
                 let res = remote.query_raw(&sql).await?;
                 let items: Vec<serde_json::Value> = serde_json::from_value(res).unwrap_or_default();
                 Ok(items)
             }
         }
+    }
+}
+
+/// Coerces ISO-8601 datetime strings into SurrealQL `<datetime>'...'` literals
+/// so SCHEMAFULL `TYPE datetime` fields are properly coerced instead of rejected as string.
+pub fn coerce_surrealql_literals(json_str: &str) -> String {
+    let re = regex::Regex::new(r#""(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?)""#)
+        .expect("Valid datetime regex");
+    re.replace_all(json_str, "<datetime>'$1'").to_string()
+}
+
+/// Recursively removes null values from JSON objects so SurrealDB treats them as NONE (absent)
+/// instead of literal NULL, preventing coercion errors on `none | record<...>` schema fields.
+pub fn strip_null_fields(val: &serde_json::Value) -> serde_json::Value {
+    match val {
+        serde_json::Value::Object(map) => {
+            let filtered: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), strip_null_fields(v)))
+                .collect();
+            serde_json::Value::Object(filtered)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(strip_null_fields).collect())
+        }
+        other => other.clone(),
     }
 }
 

@@ -140,7 +140,6 @@ pub async fn run(config: &AppConfig) -> Result<Vec<Homecides>, Box<dyn std::erro
     let agent = builder.build();
 
     println!("Model: {}", config.model);
-    println!("Prompt: {}", config.prompt_typed.query);
     println!("Requesting structured data from Gemini...");
 
     let response: Vec<Homecides> = agent.prompt_typed(&config.prompt_typed.query).await?;

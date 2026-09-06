@@ -88,7 +88,7 @@ impl Default for DatabaseConfig {
 }
 
 fn default_db_endpoint() -> String {
-    "mem://".to_string()
+    "".to_string()
 }
 
 fn default_db_namespace() -> String {
@@ -186,7 +186,10 @@ impl AppConfig {
 
         if let Ok(pass) = std::env::var("SURREAL_PASS")
             .or_else(|_| std::env::var("SURREALDB_PASS"))
+            .or_else(|_| std::env::var("APP_SURREALDB_PASS"))
+            .or_else(|_| std::env::var("APP_SURREAL_PASS"))
             .or_else(|_| std::env::var("DB_PASSWORD"))
+            .or_else(|_| std::env::var("APP_DB_PASSWORD"))
         {
             if !pass.trim().is_empty() {
                 config.db.password = Some(pass);
@@ -195,8 +198,11 @@ impl AppConfig {
 
         if let Ok(user) = std::env::var("SURREAL_USER")
             .or_else(|_| std::env::var("SURREALDB_USER"))
+            .or_else(|_| std::env::var("APP_SURREALDB_USER"))
+            .or_else(|_| std::env::var("APP_SURREAL_USER"))
             .or_else(|_| std::env::var("DB_USERNAME"))
             .or_else(|_| std::env::var("DB_USER"))
+            .or_else(|_| std::env::var("APP_DB_USER"))
         {
             if !user.trim().is_empty() {
                 config.db.username = Some(user);
@@ -206,6 +212,9 @@ impl AppConfig {
         if let Ok(endpoint) = std::env::var("SURREAL_URL")
             .or_else(|_| std::env::var("SURREALDB_URL"))
             .or_else(|_| std::env::var("DB_ENDPOINT"))
+            .or_else(|_| std::env::var("APP_SURREAL_URL"))
+            .or_else(|_| std::env::var("APP_SURREALDB_URL"))
+            .or_else(|_| std::env::var("APP_DB_ENDPOINT"))
         {
             if !endpoint.trim().is_empty() {
                 config.db.endpoint = endpoint;
@@ -214,7 +223,10 @@ impl AppConfig {
 
         if let Ok(ns) = std::env::var("SURREAL_NS")
             .or_else(|_| std::env::var("SURREALDB_NS"))
+            .or_else(|_| std::env::var("APP_SURREALDB_NS"))
+            .or_else(|_| std::env::var("APP_SURREAL_NS"))
             .or_else(|_| std::env::var("DB_NAMESPACE"))
+            .or_else(|_| std::env::var("APP_DB_NAMESPACE"))
         {
             if !ns.trim().is_empty() {
                 config.db.namespace = ns;
@@ -223,7 +235,10 @@ impl AppConfig {
 
         if let Ok(db) = std::env::var("SURREAL_DB")
             .or_else(|_| std::env::var("SURREALDB_DB"))
+            .or_else(|_| std::env::var("APP_SURREALDB_DB"))
+            .or_else(|_| std::env::var("APP_SURREAL_DB"))
             .or_else(|_| std::env::var("DB_DATABASE"))
+            .or_else(|_| std::env::var("APP_DB_DATABASE"))
         {
             if !db.trim().is_empty() {
                 config.db.database = db;
@@ -236,7 +251,8 @@ impl AppConfig {
             }
         }
 
-        if let Ok(port_str) = std::env::var("GRPC_PORT").or_else(|_| std::env::var("APP_GRPC_PORT")) {
+        if let Ok(port_str) = std::env::var("GRPC_PORT").or_else(|_| std::env::var("APP_GRPC_PORT"))
+        {
             if let Ok(port) = port_str.parse::<u16>() {
                 config.grpc.port = port;
             }
@@ -284,7 +300,7 @@ port = 50052
         assert_eq!(config.variant, ExecutionVariant::Normal);
         assert_eq!(config.prompt.query, "Say hi");
         assert_eq!(config.prompt_typed.query, "Give GDP data");
-        assert_eq!(config.db.endpoint, "mem://");
+        assert_eq!(config.db.endpoint, "");
         assert_eq!(config.db.namespace, "data");
         assert_eq!(config.db.database, "ai");
         assert_eq!(config.grpc.host, "0.0.0.0");

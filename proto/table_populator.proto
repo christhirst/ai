@@ -15,6 +15,12 @@ service TablePopulatorService {
 
   // Executes arbitrary SurrealQL query.
   rpc ExecuteSurrealQl (ExecuteSurrealQlRequest) returns (ExecuteSurrealQlResponse);
+
+  // Populates a table iteratively over a date range and interval (daily, weekly, monthly, yearly).
+  rpc PopulateTableInterval (PopulateTableIntervalRequest) returns (PopulateTableIntervalResponse);
+
+  // Streaming variant that streams each iteration result as it completes.
+  rpc PopulateTableIntervalStream (PopulateTableIntervalRequest) returns (stream IntervalIterationResult);
 }
 
 message PopulateTableRequest {
@@ -36,6 +42,11 @@ message PopulateTableRequest {
   optional string preamble = 8;
   // Whether to enable Google Search grounding for real-time web data extraction (default: true)
   optional bool enable_grounding = 9;
+  // Optional list of table columns/fields to omit from the schema sent to the model.
+  // Fields omitted here will NOT be instructed or requested from the LLM, allowing
+  // SurrealDB DEFAULT values (e.g. status DEFAULT 'Pending', fetched_at DEFAULT time::now())
+  // or downstream foreign keys (e.g. crime_id) to apply automatically without LLM hallucination.
+  repeated string omit_fields = 10;
 }
 
 message PopulateTableResponse {
@@ -84,3 +95,54 @@ message ExecuteSurrealQlResponse {
   string result_json = 2;
   string message = 3;
 }
+
+message PopulateTableIntervalRequest {
+  // Base prompt template (supports {{timeframe}}, {{date}}, or dynamic injection)
+  string prompt = 1;
+  // Target SurrealDB table name
+  string table_name = 2;
+  // Interval stepping: "daily" / "dayly", "weekly", "monthly", "yearly"
+  string interval = 3;
+  // Start date (e.g. "2000-01-01", "2000-01", "2000")
+  string start_date = 4;
+  // End date (e.g. "2000-12-31", "2000-12", "2000")
+  string end_date = 5;
+  // Optional SurrealDB namespace override (defaults to config)
+  optional string namespace = 6;
+  // Optional SurrealDB database override (defaults to config)
+  optional string database = 7;
+  // Optional SurrealQL DDL to execute on the first iteration
+  optional string define_table_sql = 8;
+  // Optional Gemini model override
+  optional string model = 9;
+  // Optional model temperature override
+  optional double temperature = 10;
+  // Optional system preamble override
+  optional string preamble = 11;
+  // Whether to enable Google Search grounding for real-time web data extraction (default: true)
+  optional bool enable_grounding = 12;
+  // Optional list of table columns/fields to omit from the schema sent to the model and insertion payload
+  repeated string omit_fields = 13;
+}
+
+message IntervalIterationResult {
+  // Human-readable timeframe label (e.g. "2000-01", "2000-01-01 to 2000-01-07")
+  string timeframe = 1;
+  string start_date = 2;
+  string end_date = 3;
+  bool success = 4;
+  uint64 records_count = 5;
+  string message = 6;
+  string data_json = 7;
+}
+
+message PopulateTableIntervalResponse {
+  bool success = 1;
+  string table_name = 2;
+  uint64 total_records_count = 3;
+  uint32 completed_iterations = 4;
+  uint32 failed_iterations = 5;
+  repeated IntervalIterationResult iterations = 6;
+  string message = 7;
+}
+

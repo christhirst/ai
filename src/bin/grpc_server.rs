@@ -14,6 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Listening on: {}:{}", config.grpc.host, config.grpc.port);
 
     let db = init_db_from_config(&config.db).await?;
+    println!("Database authentication check: passed.");
     println!("Database connected successfully.");
 
     start_grpc_server(Arc::new(config), Arc::new(db)).await?;

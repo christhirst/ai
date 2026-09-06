@@ -47,6 +47,9 @@ tonic = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
 clap = { version = "4.5", features = ["derive"] }
+tonic-reflection = "0.14"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

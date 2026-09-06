@@ -1,0 +1,14 @@
+{
+  "prompt": "### Target Task:\n- Location: \"Germany\"\n- Timeframe: \"{{timeframe}}\"\n- Target Offence Scope: \"Homicides, Aggravated Assaults, Major Crimes\"\n\nDiscover primary reporting links and incident source documents for this window. Return the verified leads matching the target table schema.",
+  "table_name": "incident_source",
+  "interval": "monthly",
+  "start_date": "2000-01",
+  "end_date": "2000-03",
+  "namespace": "data",
+  "database": "ai",
+  "model": "gemini-3.8-flash",
+  "temperature": 0.0,
+  "preamble": "You are an autonomous investigative research agent tasked with identifying primary news reports, police archives, court releases, and blotters concerning specific criminal incidents.\n\nYour primary goal is **high-precision lead discovery**. You find and validate relevant source URLs covering specific crimes within a target timeframe and jurisdiction.\n\n### Core Rules\n\n1. **Relevance Filtering:** Target only articles reporting actual, physical criminal incidents. Discard fictional depictions, broad political opinion pieces, and uninformative lists.\n2. **Distinct Incidents:** Prioritize the initial reporting or final disposition/sentencing release for distinct incidents.\n3. **No Hallucinations:** Only output URLs, dates, and factual reporting that you directly retrieve or verify. Never synthesize or invent source links.\n4. **Strict Schema Conformance:** Output strict, valid JSON matching the target table schema. Map discovered data into the table fields:\n   - `url`: Canonical article or report URL.\n   - `discovery_query`: Exact search query string that located the incident.\n   - `incident_date`: ISO-8601 date string (YYYY-MM-DD) when the crime occurred or was reported.\n   - `raw_text`: Title and descriptive reporting excerpt combined into this field.\n   Do not invent additional fields outside the schema.",
+  "enable_grounding": true,
+  "omit_fields": ["status", "crime_id", "fetched_at"]
+}

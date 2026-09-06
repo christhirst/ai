@@ -1,7 +1,7 @@
 use ai::config::AppConfig;
 use ai::grpc::{
     connect_client, ExecuteSurrealQlRequest, GetTableInfoRequest, ListTablesRequest,
-    PopulateTableRequest,
+    PopulateTableIntervalRequest, PopulateTableRequest,
 };
 use clap::Parser;
 
@@ -40,6 +40,26 @@ struct Cli {
     /// Get schema and prompt comment for a specific table
     #[arg(short = 'i', long)]
     info: Option<String>,
+
+    /// Optional Gemini model override
+    #[arg(short = 'm', long)]
+    model: Option<String>,
+
+    /// Optional fields to omit from model schema and DB payload (e.g. -O status -O crime_id)
+    #[arg(short = 'O', long = "omit-field")]
+    omit_fields: Vec<String>,
+
+    /// Optional interval step for time iteration: "daily", "weekly", "monthly", "yearly"
+    #[arg(short = 'I', long)]
+    interval: Option<String>,
+
+    /// Start date for interval stepping (e.g. "2000-01" or "2000-01-01")
+    #[arg(long)]
+    start_date: Option<String>,
+
+    /// End date for interval stepping (e.g. "2000-12" or "2000-12-31")
+    #[arg(long)]
+    end_date: Option<String>,
 
     /// Execute arbitrary SurrealQL query
     #[arg(short = 'q', long)]
@@ -121,9 +141,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .prompt
         .unwrap_or_else(|| config.prompt_typed.query.clone());
 
+    let model = cli.model.as_deref().unwrap_or(&config.model);
+
+    let target_ns = cli.namespace.as_deref().unwrap_or(&config.db.namespace);
+    let target_db = cli.database.as_deref().unwrap_or(&config.db.database);
+
+    if let Some(interval) = cli.interval {
+        let start_date = cli.start_date.expect("--start-date is required when --interval is specified");
+        let end_date = cli.end_date.expect("--end-date is required when --interval is specified");
+
+        println!("=== Populating SurrealDB Table iteratively over Intervals ===");
+        println!("Target Namespace: {}", target_ns);
+        println!("Target Database: {}", target_db);
+        println!("Target Table: {}", table);
+        println!("Interval: {}", interval);
+        println!("Date Range: {} to {}", start_date, end_date);
+        println!("Model: {}", model);
+        if !cli.omit_fields.is_empty() {
+            println!("Omit Fields: {:?}", cli.omit_fields);
+        }
+        if let Some(ddl) = &cli.ddl {
+            println!("Provided DDL: {}", ddl);
+        }
+
+        let resp = client
+            .populate_table_interval(PopulateTableIntervalRequest {
+                prompt,
+                table_name: table,
+                interval,
+                start_date,
+                end_date,
+                namespace: cli.namespace,
+                database: cli.database,
+                define_table_sql: cli.ddl,
+                model: cli.model,
+                temperature: None,
+                preamble: None,
+                enable_grounding: Some(true),
+                omit_fields: cli.omit_fields,
+            })
+            .await?
+            .into_inner();
+
+        println!("\n=== Interval Iterations Completed ===");
+        println!("Success: {}", resp.success);
+        println!("Message: {}", resp.message);
+        println!("Completed Iterations: {}/{}", resp.completed_iterations, resp.completed_iterations + resp.failed_iterations);
+        println!("Total Records Inserted: {}", resp.total_records_count);
+
+        println!("\n=== Breakdown by Iteration ===");
+        for (i, iter) in resp.iterations.iter().enumerate() {
+            println!(
+                "[{}/{}] Timeframe: {} ({} to {}) -> success={}, records={}, msg={}",
+                i + 1,
+                resp.iterations.len(),
+                iter.timeframe,
+                iter.start_date,
+                iter.end_date,
+                iter.success,
+                iter.records_count,
+                iter.message
+            );
+        }
+
+        return Ok(());
+    }
+
     println!("=== Populating SurrealDB Table via gRPC ===");
+    println!("Target Namespace: {}", target_ns);
+    println!("Target Database: {}", target_db);
     println!("Target Table: {}", table);
-    println!("Prompt: {}", prompt);
+    println!("Model: {}", model);
+    if !cli.omit_fields.is_empty() {
+        println!("Omit Fields: {:?}", cli.omit_fields);
+    }
     if let Some(ddl) = &cli.ddl {
         println!("Provided DDL: {}", ddl);
     }
@@ -135,10 +226,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             namespace: cli.namespace,
             database: cli.database,
             define_table_sql: cli.ddl,
-            model: None,
+            model: cli.model,
             temperature: None,
             preamble: None,
             enable_grounding: Some(true),
+            omit_fields: cli.omit_fields,
         })
         .await?
         .into_inner();

@@ -18,19 +18,8 @@ pub async fn extract_table_data(
     let model = model_override.unwrap_or(&config.model);
     let mut builder = client.agent(model);
 
-    // Build field specification
-    let field_spec = if fields.is_empty() {
-        "Infer appropriate structured fields from the prompt and user request.".to_string()
-    } else {
-        format!(
-            "Each object in the array MUST adhere to the following field definitions:\n{}",
-            fields
-                .iter()
-                .map(|f| format!("- {f}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+    // Build structured field specification and example template
+    let field_spec = build_schema_prompt_section(table_name, fields);
 
     let base_preamble = preamble_override
         .or(config.preamble.as_deref())
@@ -47,7 +36,8 @@ pub async fn extract_table_data(
         OUTPUT FORMAT REQUIREMENTS:\n\
         1. Return ONLY a valid JSON array of objects `[ {{ ... }}, {{ ... }} ]`.\n\
         2. Do NOT wrap output in markdown code blocks like ```json ... ``` or write any conversational text before or after.\n\
-        3. Ensure all dates and numbers follow valid formatting (e.g. ISO-8601 for dates)."
+        3. Strictly conform to the schema fields above. Do NOT invent new fields or properties.\n\
+        4. Ensure all dates follow 'YYYY-MM-DD' formatting and numbers follow numeric types."
     );
 
     builder = builder.preamble(&system_instructions);
@@ -73,8 +63,7 @@ pub async fn extract_table_data(
     tracing::info!(
         model = %model,
         table = %table_name,
-        prompt = %prompt,
-        "Requesting structured data extraction from Gemini agent"
+        "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
     );
 
     let raw_response = agent.prompt(prompt).await?;
@@ -83,7 +72,7 @@ pub async fn extract_table_data(
     tracing::info!(
         count = parsed_records.len(),
         table = %table_name,
-        "Successfully extracted structured records"
+        "PopulateTable-Agent: successfully extracted structured records"
     );
 
     Ok(parsed_records)
@@ -147,5 +136,128 @@ pub fn parse_json_response(raw: &str) -> Result<Vec<serde_json::Value>, Box<dyn 
             Ok(vec![serde_json::Value::Object(map)])
         }
         _ => Err("Model response is neither a JSON array nor a JSON object".into()),
+    }
+}
+
+/// Helper to parse field definitions and construct a clean, human-readable schema specification
+/// along with an example JSON template for the LLM.
+pub fn build_schema_prompt_section(table_name: &str, fields: &[String]) -> String {
+    if fields.is_empty() {
+        return "Infer appropriate structured fields from the prompt and user request.".to_string();
+    }
+
+    let mut field_descriptions = Vec::new();
+    let mut example_map = serde_json::Map::new();
+
+    for f in fields {
+        let (name, type_str, default_val) = parse_field_info(f);
+        let hint = semantic_hint_for_field(&name, &type_str);
+
+        let mut desc = format!("- `{name}` (type: {type_str})");
+        if let Some(def) = default_val {
+            desc.push_str(&format!(" [default: {def}]"));
+        }
+        desc.push_str(&format!(": {hint}"));
+        field_descriptions.push(desc);
+
+        if let Some(val) = example_value_for_field(&name, &type_str) {
+            example_map.insert(name, val);
+        }
+    }
+
+    let example_json = serde_json::to_string_pretty(&serde_json::json!([example_map]))
+        .unwrap_or_else(|_| "[]".to_string());
+
+    format!(
+        "STRICT SCHEMA CONFORMANCE REQUIRED FOR TABLE '{table_name}':\n\
+        The target database table is SCHEMAFULL. Every object in the returned JSON array MUST strictly use only the allowed keys listed below:\n\n\
+        ALLOWED FIELD DEFINITIONS:\n\
+        {}\n\n\
+        EXAMPLE JSON STRUCTURE:\n\
+        {}\n\n\
+        CRITICAL RULES FOR FIELD MAPPING:\n\
+        1. ONLY use the exact keys defined above. Do NOT output keys like 'title' or 'incident_title'; place all headlines and incident summaries together into 'raw_text'.\n\
+        2. Format all dates as 'YYYY-MM-DD' strings (e.g. \"2000-02-15\").\n\
+        3. Store the exact boolean search string used in 'discovery_query'.\n\
+        4. Do NOT wrap fields in nested objects or alter column names.",
+        field_descriptions.join("\n"),
+        example_json
+    )
+}
+
+pub fn parse_field_info(raw: &str) -> (String, String, Option<String>) {
+    let name = if let Some(idx) = raw.find('(') {
+        raw[..idx].trim().to_string()
+    } else {
+        raw.split_whitespace().next().unwrap_or(raw).trim().to_string()
+    };
+
+    let mut type_str = "string".to_string();
+    let mut default_val = None;
+
+    if let Some(start_paren) = raw.find('(') {
+        let ddl = &raw[start_paren + 1..raw.rfind(')').unwrap_or(raw.len())];
+        if let Some(type_idx) = ddl.find("TYPE ") {
+            let rest = &ddl[type_idx + 5..];
+            let after_type = if let Some(def_idx) = rest.find(" DEFAULT ") {
+                let (t, rem) = rest.split_at(def_idx);
+                let def_str = rem.trim_start_matches(" DEFAULT ");
+                default_val = Some(def_str.split(" PERMISSIONS").next().unwrap_or(def_str).trim().to_string());
+                t.trim()
+            } else if let Some(perm_idx) = rest.find(" PERMISSIONS") {
+                rest[..perm_idx].trim()
+            } else {
+                rest.trim()
+            };
+            type_str = after_type.to_string();
+        }
+    }
+
+    (name, type_str, default_val)
+}
+
+fn semantic_hint_for_field(name: &str, type_str: &str) -> &'static str {
+    match name {
+        "url" | "link" => "Canonical URL link to the primary reporting news source or document",
+        "discovery_query" | "query" => "The exact boolean search query string used to discover this source document",
+        "raw_text" | "content" => "Article headline/title and factual excerpt or quote describing the specific crime incident",
+        "incident_date" | "crime_date" | "date" => "Date when the incident/crime occurred in ISO-8601 YYYY-MM-DD format",
+        "status" => "Initial processing lifecycle status; defaults to 'Pending'",
+        "crime_id" => "Optional record pointer to parent crime record (omit or null if unlinked)",
+        "fetched_at" => "Timestamp when retrieved (defaults to current time if omitted)",
+        _ => {
+            if type_str.contains("datetime") {
+                "ISO-8601 date string (YYYY-MM-DD)"
+            } else if type_str.contains("int") || type_str.contains("number") {
+                "Numeric value"
+            } else {
+                "Factual data string"
+            }
+        }
+    }
+}
+
+fn example_value_for_field(name: &str, type_str: &str) -> Option<serde_json::Value> {
+    match name {
+        "url" => Some(serde_json::json!("https://www.example-news.de/incident-report.html")),
+        "discovery_query" => Some(serde_json::json!("\"Berlin\" homicide site:spiegel.de")),
+        "raw_text" => Some(serde_json::json!("Headline: Factual summary and quotation describing the criminal incident...")),
+        "incident_date" => Some(serde_json::json!("2000-02-15")),
+        "status" => Some(serde_json::json!("Pending")),
+        "crime_id" => None,
+        "fetched_at" => None,
+        _ => {
+            if type_str.contains("datetime") {
+                Some(serde_json::json!("2000-02-15"))
+            } else if type_str.contains("int") {
+                Some(serde_json::json!(100))
+            } else if type_str.contains("float") || type_str.contains("number") {
+                Some(serde_json::json!(12.5))
+            } else if type_str.contains("bool") {
+                Some(serde_json::json!(true))
+            } else {
+                Some(serde_json::json!("example value"))
+            }
+        }
     }
 }
