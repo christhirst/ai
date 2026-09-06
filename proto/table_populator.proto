@@ -47,6 +47,8 @@ message PopulateTableRequest {
   // SurrealDB DEFAULT values (e.g. status DEFAULT 'Pending', fetched_at DEFAULT time::now())
   // or downstream foreign keys (e.g. crime_id) to apply automatically without LLM hallucination.
   repeated string omit_fields = 10;
+  // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
+  optional string thinking_level = 11;
 }
 
 message PopulateTableResponse {
@@ -123,6 +125,8 @@ message PopulateTableIntervalRequest {
   optional bool enable_grounding = 12;
   // Optional list of table columns/fields to omit from the schema sent to the model and insertion payload
   repeated string omit_fields = 13;
+  // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
+  optional string thinking_level = 14;
 }
 
 message IntervalIterationResult {

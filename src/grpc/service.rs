@@ -167,6 +167,7 @@ impl TablePopulatorServiceImpl {
         temperature: Option<f64>,
         preamble: Option<&str>,
         enable_grounding: bool,
+        thinking_level: Option<&str>,
     ) -> IntervalIterationResult {
         let prompt = inject_timeframe_into_prompt(template_prompt, &step.timeframe_label);
         tracing::info!(
@@ -184,6 +185,7 @@ impl TablePopulatorServiceImpl {
             temperature,
             preamble,
             enable_grounding,
+            thinking_level,
         )
         .await
         {
@@ -369,6 +371,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             req.temperature,
             req.preamble.as_deref(),
             enable_grounding,
+            req.thinking_level.as_deref(),
         )
         .await
         {
@@ -589,7 +592,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let mut completed_iterations = 0u32;
         let mut failed_iterations = 0u32;
 
-        for step in steps {
+        let thinking_level = req.thinking_level.as_deref();
+
+        for (i, step) in steps.into_iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+
             let res = self
                 .execute_single_interval_step(
                     &step,
@@ -602,6 +611,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                     req.temperature,
                     req.preamble.as_deref(),
                     enable_grounding,
+                    thinking_level,
                 )
                 .await;
 
@@ -661,7 +671,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
 
         tokio::spawn(async move {
             let enable_grounding = req.enable_grounding.unwrap_or(true);
-            for step in steps {
+            let thinking_level = req.thinking_level.as_deref();
+
+            for (i, step) in steps.into_iter().enumerate() {
+                if i > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+
                 let res = this
                     .execute_single_interval_step(
                         &step,
@@ -674,6 +690,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                         req.temperature,
                         req.preamble.as_deref(),
                         enable_grounding,
+                        thinking_level,
                     )
                     .await;
 

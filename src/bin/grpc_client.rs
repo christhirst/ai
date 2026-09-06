@@ -61,6 +61,10 @@ struct Cli {
     #[arg(long)]
     end_date: Option<String>,
 
+    /// Optional thinking level: "minimal", "low", "medium", "high"
+    #[arg(long = "thinking-level")]
+    thinking_level: Option<String>,
+
     /// Execute arbitrary SurrealQL query
     #[arg(short = 'q', long)]
     query: Option<String>,
@@ -178,7 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 temperature: None,
                 preamble: None,
                 enable_grounding: Some(true),
-                omit_fields: cli.omit_fields,
+                omit_fields: cli.omit_fields.clone(),
+                thinking_level: cli.thinking_level.clone(),
             })
             .await?
             .into_inner();
@@ -215,6 +220,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.omit_fields.is_empty() {
         println!("Omit Fields: {:?}", cli.omit_fields);
     }
+    if let Some(tl) = &cli.thinking_level {
+        println!("Thinking Level: {}", tl);
+    }
     if let Some(ddl) = &cli.ddl {
         println!("Provided DDL: {}", ddl);
     }
@@ -231,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             preamble: None,
             enable_grounding: Some(true),
             omit_fields: cli.omit_fields,
+            thinking_level: cli.thinking_level,
         })
         .await?
         .into_inner();

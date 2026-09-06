@@ -324,6 +324,7 @@ async fn test_populate_table_request_receipt_and_validation() {
             preamble: None,
             enable_grounding: None,
             omit_fields: Vec::new(),
+            thinking_level: None,
         }))
         .await
         .unwrap_err();
@@ -343,6 +344,7 @@ async fn test_populate_table_request_receipt_and_validation() {
             preamble: None,
             enable_grounding: None,
             omit_fields: Vec::new(),
+            thinking_level: None,
         }))
         .await
         .unwrap_err();
@@ -589,6 +591,7 @@ async fn test_populate_table_interval_validation_and_stepping() {
             preamble: None,
             enable_grounding: None,
             omit_fields: Vec::new(),
+            thinking_level: None,
         }))
         .await
         .unwrap_err();
@@ -611,6 +614,7 @@ async fn test_populate_table_interval_validation_and_stepping() {
             preamble: None,
             enable_grounding: None,
             omit_fields: Vec::new(),
+            thinking_level: None,
         }))
         .await
         .unwrap_err();
@@ -618,6 +622,71 @@ async fn test_populate_table_interval_validation_and_stepping() {
     assert!(err2.message().contains("cannot be after end_date"));
 }
 
+#[tokio::test]
+async fn test_gemini_3_model_enforcement_and_thinking_level() {
+    let db = init_memory_db("test_ns", "test_db")
+        .await
+        .expect("Failed to init in-memory database");
+    let _app_db = AppDb::Local(db);
 
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "dummy_key".to_string(),
+        model: "gemini-3.7-flash".to_string(),
+        temperature: Some(0.0),
+        preamble: None,
+        variant: ai::config::ExecutionVariant::Typed,
+        prompt: Default::default(),
+        prompt_typed: Default::default(),
+        db: DatabaseConfig {
+            endpoint: "mem://".to_string(),
+            namespace: "test_ns".to_string(),
+            database: "test_db".to_string(),
+            username: None,
+            password: None,
+        },
+        grpc: GrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port: 50051,
+        },
+    });
 
+    // 1. Calling extract_table_data with legacy model (gemini-2.5-flash) must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("gemini-2.5-flash"),
+        None,
+        None,
+        true,
+        Some("low"),
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("only Gemini 3+ models"),
+        "Unexpected error message: {err_msg}"
+    );
 
+    // 2. Calling extract_table_data with invalid thinking_level must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("gemini-3.7-flash"),
+        None,
+        None,
+        true,
+        Some("ultra_high"),
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Invalid thinking_level"),
+        "Unexpected error message: {err_msg}"
+    );
+}

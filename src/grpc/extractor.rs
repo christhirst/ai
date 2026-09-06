@@ -13,9 +13,18 @@ pub async fn extract_table_data(
     temperature_override: Option<f64>,
     preamble_override: Option<&str>,
     enable_grounding: bool,
+    thinking_level_override: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
-    let client = gemini::Client::new(&config.gemini_api_key)?;
     let model = model_override.unwrap_or(&config.model);
+
+    // Enforce Gemini 3+ models only; older legacy models are prevented
+    if !model.contains("gemini-3") {
+        return Err(format!(
+            "Unsupported model '{model}': only Gemini 3+ models (e.g. gemini-3.7-flash, gemini-3.8-flash) are supported."
+        ).into());
+    }
+
+    let client = gemini::Client::new(&config.gemini_api_key)?;
     let mut builder = client.agent(model);
 
     // Build structured field specification and example template
@@ -37,20 +46,54 @@ pub async fn extract_table_data(
         1. Return ONLY a valid JSON array of objects `[ {{ ... }}, {{ ... }} ]`.\n\
         2. Do NOT wrap output in markdown code blocks like ```json ... ``` or write any conversational text before or after.\n\
         3. Strictly conform to the schema fields above. Do NOT invent new fields or properties.\n\
-        4. Ensure all dates follow 'YYYY-MM-DD' formatting and numbers follow numeric types."
+        4. Ensure all dates follow 'YYYY-MM-DD' formatting and numbers follow numeric types.\n\
+        5. If no records or incidents are found matching the criteria for the specified timeframe, return an empty JSON array: `[]`. Do NOT return empty text or any conversational explanation."
     );
 
     builder = builder.preamble(&system_instructions);
 
+    // Validate thinking level if specified
+    let normalized_thinking_level = match thinking_level_override.map(|s| s.trim().to_lowercase()) {
+        Some(s) if s.is_empty() => None,
+        Some(s) => match s.as_str() {
+            "minimal" | "low" | "medium" | "high" => Some(s),
+            other => {
+                return Err(format!(
+                    "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
+                ).into());
+            }
+        },
+        None => None,
+    };
+
+    // Default to "low" if grounding is enabled and no thinking level is explicitly provided,
+    // to prevent runaway 10,000+ token thought loops that exhaust the turn.
+    let effective_thinking_level = match (normalized_thinking_level, enable_grounding) {
+        (Some(level), _) => Some(level),
+        (None, true) => Some("low".to_string()),
+        (None, false) => None,
+    };
+
+    let mut additional_params = serde_json::Map::new();
+
     if enable_grounding {
-        let grounding_config = json!({
-            "tools": [
-                {
-                    "google_search": {}
-                }
-            ]
-        });
-        builder = builder.additional_params(grounding_config);
+        additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+    }
+
+    let mut gen_config = serde_json::Map::new();
+    if let Some(level) = effective_thinking_level {
+        gen_config.insert("thinkingConfig".to_string(), json!({"thinkingLevel": level}));
+    }
+
+    if !gen_config.is_empty() {
+        additional_params.insert(
+            "generationConfig".to_string(),
+            serde_json::Value::Object(gen_config),
+        );
+    }
+
+    if !additional_params.is_empty() {
+        builder = builder.additional_params(serde_json::Value::Object(additional_params));
     }
 
     let temp = temperature_override.or(config.temperature);
