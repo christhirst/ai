@@ -3,35 +3,72 @@ use crate::prompt_typed::{GdpRecord, Homecides};
 use surrealdb::{Connection, Surreal};
 
 pub trait DbWritable {
-    fn create_homecide(&self, record: &Homecides) -> impl std::future::Future<Output = Result<Option<Homecides>, Box<dyn std::error::Error>>> + Send;
-    fn create_homecides(&self, records: &[Homecides]) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
-    fn create_gdp(&self, record: &GdpRecord) -> impl std::future::Future<Output = Result<Option<GdpRecord>, Box<dyn std::error::Error>>> + Send;
-    fn create_gdps(&self, records: &[GdpRecord]) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
-    fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> impl std::future::Future<Output = Result<Vec<serde_json::Value>, Box<dyn std::error::Error>>> + Send;
+    fn create_homecide(
+        &self,
+        record: &Homecides,
+    ) -> impl std::future::Future<Output = Result<Option<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn create_homecides(
+        &self,
+        records: &[Homecides],
+    ) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn create_gdp(
+        &self,
+        record: &GdpRecord,
+    ) -> impl std::future::Future<Output = Result<Option<GdpRecord>, Box<dyn std::error::Error>>> + Send;
+    fn create_gdps(
+        &self,
+        records: &[GdpRecord],
+    ) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
+    fn create_dynamic_records(
+        &self,
+        table: &str,
+        records: &[serde_json::Value],
+    ) -> impl std::future::Future<
+        Output = Result<Vec<serde_json::Value>, Box<dyn std::error::Error>>,
+    > + Send;
 }
 
 impl<C: Connection + Send + Sync> DbWritable for Surreal<C> {
-    async fn create_homecide(&self, record: &Homecides) -> Result<Option<Homecides>, Box<dyn std::error::Error>> {
+    async fn create_homecide(
+        &self,
+        record: &Homecides,
+    ) -> Result<Option<Homecides>, Box<dyn std::error::Error>> {
         let res = self.create(TABLE_HOMECIDES).content(record.clone()).await?;
         Ok(res)
     }
 
-    async fn create_homecides(&self, records: &[Homecides]) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
-        let res = self.insert(TABLE_HOMECIDES).content(records.to_vec()).await?;
+    async fn create_homecides(
+        &self,
+        records: &[Homecides],
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+        let res = self
+            .insert(TABLE_HOMECIDES)
+            .content(records.to_vec())
+            .await?;
         Ok(res)
     }
 
-    async fn create_gdp(&self, record: &GdpRecord) -> Result<Option<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn create_gdp(
+        &self,
+        record: &GdpRecord,
+    ) -> Result<Option<GdpRecord>, Box<dyn std::error::Error>> {
         let res = self.create(TABLE_GDP).content(record.clone()).await?;
         Ok(res)
     }
 
-    async fn create_gdps(&self, records: &[GdpRecord]) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn create_gdps(
+        &self,
+        records: &[GdpRecord],
+    ) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
         let res = self.insert(TABLE_GDP).content(records.to_vec()).await?;
         Ok(res)
     }
 
-    async fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    async fn create_dynamic_records(
+        &self,
+        table: &str,
+        records: &[serde_json::Value],
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
         if records.is_empty() {
             return Ok(Vec::new());
         }
@@ -42,7 +79,10 @@ impl<C: Connection + Send + Sync> DbWritable for Surreal<C> {
 }
 
 impl DbWritable for AppDb {
-    async fn create_homecide(&self, record: &Homecides) -> Result<Option<Homecides>, Box<dyn std::error::Error>> {
+    async fn create_homecide(
+        &self,
+        record: &Homecides,
+    ) -> Result<Option<Homecides>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.create_homecide(record).await,
             AppDb::Remote(remote) => {
@@ -63,7 +103,10 @@ impl DbWritable for AppDb {
         }
     }
 
-    async fn create_homecides(&self, records: &[Homecides]) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn create_homecides(
+        &self,
+        records: &[Homecides],
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.create_homecides(records).await,
             AppDb::Remote(remote) => {
@@ -90,7 +133,10 @@ impl DbWritable for AppDb {
         }
     }
 
-    async fn create_gdp(&self, record: &GdpRecord) -> Result<Option<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn create_gdp(
+        &self,
+        record: &GdpRecord,
+    ) -> Result<Option<GdpRecord>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.create_gdp(record).await,
             AppDb::Remote(remote) => {
@@ -105,7 +151,10 @@ impl DbWritable for AppDb {
         }
     }
 
-    async fn create_gdps(&self, records: &[GdpRecord]) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn create_gdps(
+        &self,
+        records: &[GdpRecord],
+    ) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.create_gdps(records).await,
             AppDb::Remote(remote) => {
@@ -121,14 +170,19 @@ impl DbWritable for AppDb {
         }
     }
 
-    async fn create_dynamic_records(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    async fn create_dynamic_records(
+        &self,
+        table: &str,
+        records: &[serde_json::Value],
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.create_dynamic_records(table, records).await,
             AppDb::Remote(remote) => {
                 if records.is_empty() {
                     return Ok(Vec::new());
                 }
-                let cleaned: Vec<serde_json::Value> = records.iter().map(strip_null_fields).collect();
+                let cleaned: Vec<serde_json::Value> =
+                    records.iter().map(strip_null_fields).collect();
                 let data_json = serde_json::to_string(&cleaned)?;
                 let coerced_json = coerce_surrealql_literals(&data_json);
                 let sql = format!("INSERT INTO {table} {coerced_json};");
@@ -143,8 +197,10 @@ impl DbWritable for AppDb {
 /// Coerces ISO-8601 datetime strings into SurrealQL `<datetime>'...'` literals
 /// so SCHEMAFULL `TYPE datetime` fields are properly coerced instead of rejected as string.
 pub fn coerce_surrealql_literals(json_str: &str) -> String {
-    let re = regex::Regex::new(r#""(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?)""#)
-        .expect("Valid datetime regex");
+    let re = regex::Regex::new(
+        r#""(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?)""#,
+    )
+    .expect("Valid datetime regex");
     re.replace_all(json_str, "<datetime>'$1'").to_string()
 }
 

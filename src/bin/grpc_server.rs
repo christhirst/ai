@@ -14,8 +14,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("=== Tonic gRPC SurrealDB Table Populator Server ===");
-    println!("SurrealDB Target: {} (ns: {}, db: {})", config.db.endpoint, config.db.namespace, config.db.database);
-    println!("Provider: {} (Gemini Model: {}, Qwen Model: {})", config.provider, config.model, config.qwen_model);
+    println!(
+        "SurrealDB Target: {} (ns: {}, db: {})",
+        config.db.endpoint, config.db.namespace, config.db.database
+    );
+    println!(
+        "Provider: {} (Gemini Model: {}, Qwen Model: {})",
+        config.provider, config.model, config.qwen_model
+    );
     println!("Listening on: {}:{}", config.grpc.host, config.grpc.port);
 
     let db = init_db_from_config(&config.db).await?;

@@ -1,7 +1,7 @@
 use ai::config::AppConfig;
 use ai::grpc::{
-    connect_client_with_auth, ClientAuth, ExecuteSurrealQlRequest, GetTableInfoRequest,
-    ListTablesRequest, PopulateTableIntervalRequest, PopulateTableRequest,
+    ClientAuth, ExecuteSurrealQlRequest, GetTableInfoRequest, ListTablesRequest,
+    PopulateTableIntervalRequest, PopulateTableRequest, connect_client_with_auth,
 };
 use clap::Parser;
 
@@ -151,7 +151,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .into_inner();
         println!("Table Name: {}", resp.table_name);
-        println!("Prompt Comment: {}", if resp.comment.is_empty() { "(none)" } else { &resp.comment });
+        println!(
+            "Prompt Comment: {}",
+            if resp.comment.is_empty() {
+                "(none)"
+            } else {
+                &resp.comment
+            }
+        );
         println!("Fields: {:?}", resp.fields);
         println!("\nRaw Schema:\n{}", resp.schema_json);
         return Ok(());
@@ -175,9 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Default operation: PopulateTable
-    let table = cli
-        .table
-        .unwrap_or_else(|| "homecides".to_string());
+    let table = cli.table.unwrap_or_else(|| "homecides".to_string());
     let prompt = cli
         .prompt
         .unwrap_or_else(|| config.prompt_typed.query.clone());
@@ -202,8 +207,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target_db = cli.database.as_deref().unwrap_or(&config.db.database);
 
     if let Some(interval) = cli.interval {
-        let start_date = cli.start_date.expect("--start-date is required when --interval is specified");
-        let end_date = cli.end_date.expect("--end-date is required when --interval is specified");
+        let start_date = cli
+            .start_date
+            .expect("--start-date is required when --interval is specified");
+        let end_date = cli
+            .end_date
+            .expect("--end-date is required when --interval is specified");
 
         println!("=== Populating SurrealDB Table iteratively over Intervals ===");
         println!("Target Namespace: {}", target_ns);
@@ -248,7 +257,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n=== Interval Iterations Completed ===");
         println!("Success: {}", resp.success);
         println!("Message: {}", resp.message);
-        println!("Completed Iterations: {}/{}", resp.completed_iterations, resp.completed_iterations + resp.failed_iterations);
+        println!(
+            "Completed Iterations: {}/{}",
+            resp.completed_iterations,
+            resp.completed_iterations + resp.failed_iterations
+        );
         println!("Total Records Inserted: {}", resp.total_records_count);
 
         println!("\n=== Breakdown by Iteration ===");

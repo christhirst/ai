@@ -9,18 +9,18 @@ pub mod pb {
 }
 
 pub use auth::{
-    check_oauth_at_startup, create_auth_layer, discover_oidc_endpoints, AuthIdentity,
-    AuthValidator, GrpcAuthInterceptor, OAuthCheckReport, OidcDiscoveryDocument,
+    AuthIdentity, AuthValidator, GrpcAuthInterceptor, OAuthCheckReport, OidcDiscoveryDocument,
+    check_oauth_at_startup, create_auth_layer, discover_oidc_endpoints,
 };
-pub use client::{connect_client, connect_client_with_auth, AgentGrpcClient, ClientAuth};
+pub use client::{AgentGrpcClient, ClientAuth, connect_client, connect_client_with_auth};
 pub use extractor::{extract_table_data, parse_json_response};
 pub use intervals::{
-    generate_interval_steps, inject_timeframe_into_prompt, parse_interval, DateIntervalStep,
-    IntervalType,
+    DateIntervalStep, IntervalType, generate_interval_steps, inject_timeframe_into_prompt,
+    parse_interval,
 };
 pub use pb::table_populator_service_server::{TablePopulatorService, TablePopulatorServiceServer};
 pub use pb::*;
-pub use service::{sanitize_and_map_records, TablePopulatorServiceImpl};
+pub use service::{TablePopulatorServiceImpl, sanitize_and_map_records};
 
 use crate::config::AppConfig;
 use crate::db::AppDb;
@@ -28,7 +28,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::transport::Server;
 
-pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("table_populator_descriptor");
+pub const FILE_DESCRIPTOR_SET: &[u8] =
+    tonic::include_file_descriptor_set!("table_populator_descriptor");
 
 /// Starts the Tonic gRPC server on the configured address and port.
 pub async fn start_grpc_server(
@@ -50,7 +51,10 @@ pub async fn start_grpc_server(
     if config.grpc.auth.is_active() {
         println!("gRPC Authentication: ACTIVE");
         if config.grpc.auth.admin_password.is_some() {
-            println!(" - Basic Auth: ENABLED (admin user: '{}')", config.grpc.auth.admin_user);
+            println!(
+                " - Basic Auth: ENABLED (admin user: '{}')",
+                config.grpc.auth.admin_user
+            );
         }
         if config.grpc.auth.oauth.is_configured() {
             println!(" - OAuth 2.0 Bearer: ENABLED");

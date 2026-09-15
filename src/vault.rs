@@ -374,10 +374,10 @@ pub fn create_vault_client(config: &VaultConfig) -> Result<VaultClient, VaultErr
     let mut builder = VaultClientSettingsBuilder::default();
     builder.address(&config.address);
     builder.token(token);
-    if let Some(ref ns) = config.namespace {
-        if !ns.trim().is_empty() {
-            builder.namespace(Some(ns.clone()));
-        }
+    if let Some(ref ns) = config.namespace
+        && !ns.trim().is_empty()
+    {
+        builder.namespace(Some(ns.clone()));
     }
 
     let settings = builder

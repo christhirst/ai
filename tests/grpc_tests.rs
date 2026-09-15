@@ -1,17 +1,17 @@
 use ai::config::{AppConfig, DatabaseConfig, GrpcConfig};
 use ai::db::{
-    execute_surrealql, get_defined_tables, get_table_schema_summary, init_memory_db,
-    insert_dynamic_records, set_table_comment, AppDb,
+    AppDb, execute_surrealql, get_defined_tables, get_table_schema_summary, init_memory_db,
+    insert_dynamic_records, set_table_comment,
 };
 use ai::grpc::{
-    connect_client, parse_json_response, sanitize_and_map_records, ExecuteSurrealQlRequest,
-    GetTableInfoRequest, ListTablesRequest, PopulateTableIntervalRequest, PopulateTableRequest,
-    TablePopulatorService, TablePopulatorServiceImpl, TablePopulatorServiceServer,
+    ExecuteSurrealQlRequest, GetTableInfoRequest, ListTablesRequest, PopulateTableIntervalRequest,
+    PopulateTableRequest, TablePopulatorService, TablePopulatorServiceImpl,
+    TablePopulatorServiceServer, connect_client, parse_json_response, sanitize_and_map_records,
 };
 use serde_json::json;
 use std::sync::Arc;
-use tonic::transport::Server;
 use tonic::Request;
+use tonic::transport::Server;
 
 #[test]
 fn test_parse_json_response_variations() {
@@ -72,7 +72,9 @@ async fn test_table_ddl_and_prompt_comment_storage() {
     let ddl = "DEFINE TABLE crime_stats SCHEMAFULL; \
                DEFINE FIELD city ON TABLE crime_stats TYPE string; \
                DEFINE FIELD incident_count ON TABLE crime_stats TYPE int;";
-    execute_surrealql(&app_db, ddl).await.expect("Failed to execute DDL");
+    execute_surrealql(&app_db, ddl)
+        .await
+        .expect("Failed to execute DDL");
 
     // 2. Set the prompt as the table COMMENT
     let prompt = "Extract total reported crime incidents for Berlin and Munich in 2025";
@@ -150,9 +152,13 @@ async fn test_grpc_service_methods() {
     assert!(ddl_resp.success);
 
     // 2. Set comment on the table
-    set_table_comment(&*app_db, "inventory", "Track inventory levels for warehouse A")
-        .await
-        .unwrap();
+    set_table_comment(
+        &*app_db,
+        "inventory",
+        "Track inventory levels for warehouse A",
+    )
+    .await
+    .unwrap();
 
     // 3. Get table info via RPC
     let info_resp = service
@@ -245,9 +251,13 @@ async fn test_grpc_network_roundtrip() {
     assert!(ddl_resp.success);
 
     // Set table comment
-    set_table_comment(&*app_db, "servers", "List of critical production infrastructure servers")
-        .await
-        .unwrap();
+    set_table_comment(
+        &*app_db,
+        "servers",
+        "List of critical production infrastructure servers",
+    )
+    .await
+    .unwrap();
 
     // Query table info over gRPC
     let info_resp = client
@@ -260,7 +270,10 @@ async fn test_grpc_network_roundtrip() {
         .expect("get_table_info over gRPC failed")
         .into_inner();
     assert_eq!(info_resp.table_name, "servers");
-    assert_eq!(info_resp.comment, "List of critical production infrastructure servers");
+    assert_eq!(
+        info_resp.comment,
+        "List of critical production infrastructure servers"
+    );
     assert!(info_resp.fields.iter().any(|f| f.contains("hostname")));
 
     // List tables over gRPC
@@ -356,7 +369,9 @@ async fn test_schema_field_names_and_unlisted_field_sanitization() {
 
     // 1. Define a strict SCHEMAFULL table with only 'title' and 'url'
     let ddl = "DEFINE TABLE articles SCHEMAFULL; DEFINE FIELD title ON TABLE articles TYPE string; DEFINE FIELD url ON TABLE articles TYPE string;";
-    execute_surrealql(&*app_db, ddl).await.expect("Failed to execute DDL");
+    execute_surrealql(&*app_db, ddl)
+        .await
+        .expect("Failed to execute DDL");
 
     // 2. Introspect schema summary and verify field_names
     let summary = get_table_schema_summary(&*app_db, "articles")
@@ -367,17 +382,18 @@ async fn test_schema_field_names_and_unlisted_field_sanitization() {
     assert!(!summary.field_names.contains(&"incident_date".to_string()));
 
     // 3. Prepare records that contain an extraneous unlisted field 'incident_date'
-    let raw_records = vec![
-        json!({
-            "title": "Article 1",
-            "url": "https://example.com/1",
-            "incident_date": "2024-01-01" // Extraneous field!
-        }),
-    ];
+    let raw_records = vec![json!({
+        "title": "Article 1",
+        "url": "https://example.com/1",
+        "incident_date": "2024-01-01" // Extraneous field!
+    })];
 
     // Raw insertion of this record directly into SCHEMAFULL table would fail:
     let direct_err = insert_dynamic_records(&*app_db, "articles", &raw_records).await;
-    assert!(direct_err.is_err(), "SCHEMAFULL should reject unlisted field");
+    assert!(
+        direct_err.is_err(),
+        "SCHEMAFULL should reject unlisted field"
+    );
 
     // 4. Sanitize records using field_names (same logic as in PopulateTable service)
     let allowed: std::collections::HashSet<&str> = summary
@@ -481,7 +497,9 @@ async fn test_omit_fields_filters_schema_and_preserves_defaults() {
                DEFINE FIELD raw_text ON TABLE incident_source TYPE string; \
                DEFINE FIELD status ON TABLE incident_source TYPE string DEFAULT 'Pending'; \
                DEFINE FIELD fetched_at ON TABLE incident_source TYPE datetime DEFAULT time::now();";
-    execute_surrealql(&app_db, ddl).await.expect("Failed to execute DDL");
+    execute_surrealql(&app_db, ddl)
+        .await
+        .expect("Failed to execute DDL");
 
     // 2. Introspect schema
     let summary = get_table_schema_summary(&app_db, "incident_source")
@@ -729,8 +747,8 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
 #[tokio::test]
 async fn test_grpc_middleware_authentication_full_suite() {
     use ai::config::{GrpcAuthConfig, GrpcOauthConfig};
-    use ai::grpc::{connect_client_with_auth, create_auth_layer, ClientAuth};
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use ai::grpc::{ClientAuth, connect_client_with_auth, create_auth_layer};
+    use jsonwebtoken::{EncodingKey, Header, encode};
 
     let db = init_memory_db("auth_ns", "auth_db")
         .await
@@ -875,12 +893,10 @@ async fn test_grpc_middleware_authentication_full_suite() {
     )
     .unwrap();
 
-    let mut good_oauth_client = connect_client_with_auth(
-        &endpoint,
-        Some(ClientAuth::Bearer(valid_jwt)),
-    )
-    .await
-    .unwrap();
+    let mut good_oauth_client =
+        connect_client_with_auth(&endpoint, Some(ClientAuth::Bearer(valid_jwt)))
+            .await
+            .unwrap();
     let resp = good_oauth_client
         .list_tables(ListTablesRequest {
             namespace: None,
@@ -978,4 +994,3 @@ async fn test_oauth_startup_check_integration() {
         .expect("Bypassed auth check should return Ok(None)");
     assert!(report_bypassed.is_none());
 }
-

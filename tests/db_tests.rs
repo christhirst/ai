@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)]
+
 use ai::config::{AppConfig, DatabaseConfig};
 use ai::db::{
     AppDb, LocalDb, create_gdp_record, create_gdp_records, create_homecide_record,
@@ -70,7 +72,8 @@ async fn test_app_config_db_loading() {
         std::env::remove_var("SURREAL_DB");
         std::env::remove_var("SURREALDB_DB");
         std::env::remove_var("DB_DATABASE");
-        if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("APP_GEMINI_API_KEY").is_err() {
+        if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("APP_GEMINI_API_KEY").is_err()
+        {
             std::env::set_var("GEMINI_API_KEY", "test_key");
         }
         std::env::set_var("VAULT_ENABLED", "false");
@@ -348,7 +351,9 @@ async fn test_env_var_credential_overrides() {
         std::env::set_var("VAULT_ENABLED", "false");
     }
 
-    let config = AppConfig::load().await.expect("Failed to load config with env vars");
+    let config = AppConfig::load()
+        .await
+        .expect("Failed to load config with env vars");
     assert_eq!(config.gemini_api_key, "test_env_gemini_key");
     assert_eq!(config.db.password.as_deref(), Some("test_env_password_123"));
     assert_eq!(config.db.username.as_deref(), Some("test_env_user"));
@@ -371,14 +376,38 @@ async fn test_env_var_credential_overrides() {
 fn test_normalize_base_url() {
     use ai::db::normalize_base_url;
 
-    assert_eq!(normalize_base_url("wss://app.ux-ti.com/rpc"), "https://app.ux-ti.com");
-    assert_eq!(normalize_base_url("wss://app.ux-ti.com/rpc/"), "https://app.ux-ti.com");
-    assert_eq!(normalize_base_url("ws://localhost:8000/rpc"), "http://localhost:8000");
-    assert_eq!(normalize_base_url("ws://localhost:8000"), "http://localhost:8000");
-    assert_eq!(normalize_base_url("http://127.0.0.1:8000"), "http://127.0.0.1:8000");
-    assert_eq!(normalize_base_url("http://127.0.0.1:8000/sql"), "http://127.0.0.1:8000");
-    assert_eq!(normalize_base_url("https://app.ux-ti.com"), "https://app.ux-ti.com");
-    assert_eq!(normalize_base_url("https://app.ux-ti.com/sql"), "https://app.ux-ti.com");
+    assert_eq!(
+        normalize_base_url("wss://app.ux-ti.com/rpc"),
+        "https://app.ux-ti.com"
+    );
+    assert_eq!(
+        normalize_base_url("wss://app.ux-ti.com/rpc/"),
+        "https://app.ux-ti.com"
+    );
+    assert_eq!(
+        normalize_base_url("ws://localhost:8000/rpc"),
+        "http://localhost:8000"
+    );
+    assert_eq!(
+        normalize_base_url("ws://localhost:8000"),
+        "http://localhost:8000"
+    );
+    assert_eq!(
+        normalize_base_url("http://127.0.0.1:8000"),
+        "http://127.0.0.1:8000"
+    );
+    assert_eq!(
+        normalize_base_url("http://127.0.0.1:8000/sql"),
+        "http://127.0.0.1:8000"
+    );
+    assert_eq!(
+        normalize_base_url("https://app.ux-ti.com"),
+        "https://app.ux-ti.com"
+    );
+    assert_eq!(
+        normalize_base_url("https://app.ux-ti.com/sql"),
+        "https://app.ux-ti.com"
+    );
 }
 
 #[tokio::test]
@@ -393,7 +422,9 @@ async fn test_app_surrealdb_env_vars() {
         std::env::set_var("VAULT_ENABLED", "false");
     }
 
-    let config = AppConfig::load().await.expect("Failed to load config with APP_SURREALDB env vars");
+    let config = AppConfig::load()
+        .await
+        .expect("Failed to load config with APP_SURREALDB env vars");
     assert_eq!(config.db.password.as_deref(), Some("app_pass_test"));
     assert_eq!(config.db.username.as_deref(), Some("app_user_test"));
 
@@ -413,7 +444,9 @@ async fn test_db_check_auth_local() {
         username: None,
         password: None,
     };
-    let db = init_db_from_config(&mem_config).await.expect("Local DB check_auth should succeed");
+    let db = init_db_from_config(&mem_config)
+        .await
+        .expect("Local DB check_auth should succeed");
     assert!(db.check_auth().await.is_ok());
 }
 
@@ -518,7 +551,10 @@ async fn test_vault_enabled_strict_abort_when_unreachable() {
     }
 
     let result = AppConfig::load().await;
-    assert!(result.is_err(), "AppConfig::load() must return Err when Vault is enabled and unreachable");
+    assert!(
+        result.is_err(),
+        "AppConfig::load() must return Err when Vault is enabled and unreachable"
+    );
 
     unsafe {
         std::env::remove_var("VAULT_ENABLED");
@@ -548,10 +584,12 @@ async fn test_vault_token_renewer_spawns_and_cancels() {
         ..Default::default()
     };
 
-    let mut renewer = config.start_token_renewer().unwrap().expect("Should return Some(RenewerHandle)");
+    let mut renewer = config
+        .start_token_renewer()
+        .unwrap()
+        .expect("Should return Some(RenewerHandle)");
     assert!(!renewer.is_finished());
     renewer.stop();
     let res = renewer.wait_for_completion().await;
     assert!(res.is_ok());
 }
-

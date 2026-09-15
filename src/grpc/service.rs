@@ -1,11 +1,11 @@
 use crate::config::{AppConfig, DatabaseConfig};
 use crate::db::{
-    execute_surrealql, get_defined_tables, get_table_schema_summary, init_db_from_config,
-    insert_dynamic_records, set_table_comment, AppDb,
+    AppDb, execute_surrealql, get_defined_tables, get_table_schema_summary, init_db_from_config,
+    insert_dynamic_records, set_table_comment,
 };
 use crate::grpc::extractor::extract_table_data;
 use crate::grpc::intervals::{
-    generate_interval_steps, inject_timeframe_into_prompt, parse_interval, DateIntervalStep,
+    DateIntervalStep, generate_interval_steps, inject_timeframe_into_prompt, parse_interval,
 };
 use crate::grpc::pb::table_populator_service_server::TablePopulatorService;
 use crate::grpc::pb::{
@@ -46,13 +46,16 @@ impl TablePopulatorServiceImpl {
                 username: self.config.db.username.clone(),
                 password: self.config.db.password.clone(),
             };
-            init_db_from_config(&custom_cfg)
-                .await
-                .map_err(|e| Status::internal(format!("Failed to connect to target SurrealDB {ns}/{db}: {e}")))
+            init_db_from_config(&custom_cfg).await.map_err(|e| {
+                Status::internal(format!(
+                    "Failed to connect to target SurrealDB {ns}/{db}: {e}"
+                ))
+            })
         }
     }
 
     /// Prepares database, interval date steps, and filtered schema for an interval run.
+    #[allow(clippy::too_many_arguments)]
     async fn prepare_interval_run(
         &self,
         prompt: &str,
@@ -64,9 +67,21 @@ impl TablePopulatorServiceImpl {
         db_override: Option<&str>,
         ddl_opt: Option<&str>,
         omit_fields: &[String],
-    ) -> Result<(AppDb, Vec<DateIntervalStep>, Vec<String>, Vec<String>, String, String), Status> {
+    ) -> Result<
+        (
+            AppDb,
+            Vec<DateIntervalStep>,
+            Vec<String>,
+            Vec<String>,
+            String,
+            String,
+        ),
+        Status,
+    > {
         if prompt.is_empty() {
-            return Err(Status::invalid_argument("Prompt template must not be empty"));
+            return Err(Status::invalid_argument(
+                "Prompt template must not be empty",
+            ));
         }
         if table_name.is_empty() {
             return Err(Status::invalid_argument("Table name must not be empty"));
@@ -78,11 +93,10 @@ impl TablePopulatorServiceImpl {
             return Err(Status::invalid_argument("end_date must not be empty"));
         }
 
-        let interval_type = parse_interval(interval_str)
-            .map_err(|e| Status::invalid_argument(e))?;
+        let interval_type = parse_interval(interval_str).map_err(Status::invalid_argument)?;
 
         let steps = generate_interval_steps(interval_type, start_date_str, end_date_str)
-            .map_err(|e| Status::invalid_argument(e))?;
+            .map_err(Status::invalid_argument)?;
 
         let db = self.get_db_for_request(ns_override, db_override).await?;
 
@@ -93,13 +107,16 @@ impl TablePopulatorServiceImpl {
                 tracing::info!(table = %table_name, ddl = %trimmed_ddl, "Executing provided DDL in SurrealDB before intervals");
                 if let Err(e) = execute_surrealql(&db, trimmed_ddl).await {
                     tracing::error!(table = %table_name, error = %e, "Failed to execute DDL in SurrealDB");
-                    return Err(Status::invalid_argument(format!("Failed to execute DDL in SurrealDB: {e}")));
+                    return Err(Status::invalid_argument(format!(
+                        "Failed to execute DDL in SurrealDB: {e}"
+                    )));
                 }
             }
         }
 
         // 2. Set table comment reflecting base prompt and date interval
-        let comment_str = format!("{prompt} (Interval: {interval_str}, {start_date_str} to {end_date_str})");
+        let comment_str =
+            format!("{prompt} (Interval: {interval_str}, {start_date_str} to {end_date_str})");
         if let Err(e) = set_table_comment(&db, table_name, &comment_str).await {
             tracing::warn!(table = %table_name, error = %e, "Failed to set table comment");
         }
@@ -151,10 +168,18 @@ impl TablePopulatorServiceImpl {
         let effective_ns = ns_override.unwrap_or(&self.config.db.namespace).to_string();
         let effective_db = db_override.unwrap_or(&self.config.db.database).to_string();
 
-        Ok((db, steps, model_fields, target_field_names, effective_ns, effective_db))
+        Ok((
+            db,
+            steps,
+            model_fields,
+            target_field_names,
+            effective_ns,
+            effective_db,
+        ))
     }
 
     /// Executes extraction and insertion for a single interval step.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_single_interval_step(
         &self,
         step: &DateIntervalStep,
@@ -237,7 +262,8 @@ impl TablePopulatorServiceImpl {
         };
 
         let records_count = inserted.len() as u64;
-        let data_json = serde_json::to_string_pretty(&inserted).unwrap_or_else(|_| "[]".to_string());
+        let data_json =
+            serde_json::to_string_pretty(&inserted).unwrap_or_else(|_| "[]".to_string());
 
         IntervalIterationResult {
             timeframe: step.timeframe_label.clone(),
@@ -265,10 +291,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let table_name = req.table_name.trim().to_string();
 
         let effective_model = req.model.as_deref().unwrap_or(&self.config.model);
-        let effective_provider = req.provider.as_deref().unwrap_or(match self.config.provider {
-            crate::config::ModelProvider::Gemini => "gemini",
-            crate::config::ModelProvider::Qwen => "qwen",
-        });
+        let effective_provider = req
+            .provider
+            .as_deref()
+            .unwrap_or(match self.config.provider {
+                crate::config::ModelProvider::Gemini => "gemini",
+                crate::config::ModelProvider::Qwen => "qwen",
+            });
         tracing::info!(
             table = %table_name,
             provider = %effective_provider,
@@ -298,7 +327,9 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 tracing::info!(table = %table_name, ddl = %trimmed_ddl, "Executing provided DDL in SurrealDB");
                 if let Err(e) = execute_surrealql(&db, trimmed_ddl).await {
                     tracing::error!(table = %table_name, error = %e, "Failed to execute DDL in SurrealDB");
-                    return Err(Status::invalid_argument(format!("Failed to execute DDL in SurrealDB: {e}")));
+                    return Err(Status::invalid_argument(format!(
+                        "Failed to execute DDL in SurrealDB: {e}"
+                    )));
                 }
             }
         }
@@ -429,16 +460,22 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                     error = %e,
                     "PopulateTable-Agent failed to insert records into SurrealDB"
                 );
-                return Err(Status::internal(format!("Failed to insert records into SurrealDB table '{table_name}': {e}")));
+                return Err(Status::internal(format!(
+                    "Failed to insert records into SurrealDB table '{table_name}': {e}"
+                )));
             }
         };
 
         let records_count = inserted.len() as u64;
-        let data_json = serde_json::to_string_pretty(&inserted).unwrap_or_else(|_| "[]".to_string());
+        let data_json =
+            serde_json::to_string_pretty(&inserted).unwrap_or_else(|_| "[]".to_string());
         let table_schema_json = serde_json::to_string_pretty(&schema_summary.raw_info)
             .unwrap_or_else(|_| "{}".to_string());
 
-        let effective_ns = req.namespace.as_deref().unwrap_or(&self.config.db.namespace);
+        let effective_ns = req
+            .namespace
+            .as_deref()
+            .unwrap_or(&self.config.db.namespace);
         let effective_db = req.database.as_deref().unwrap_or(&self.config.db.database);
 
         let reply = PopulateTableResponse {
@@ -489,7 +526,9 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             .await
             .map_err(|e| {
                 tracing::error!(table = %table_name, error = %e, "Failed to query table info");
-                Status::internal(format!("Failed to query table info for '{table_name}': {e}"))
+                Status::internal(format!(
+                    "Failed to query table info for '{table_name}': {e}"
+                ))
             })?;
 
         let schema_json = serde_json::to_string_pretty(&summary.raw_info).unwrap_or_default();
@@ -520,14 +559,15 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             .get_db_for_request(req.namespace.as_deref(), req.database.as_deref())
             .await?;
 
-        let tables = get_defined_tables(&db)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list tables");
-                Status::internal(format!("Failed to list tables: {e}"))
-            })?;
+        let tables = get_defined_tables(&db).await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to list tables");
+            Status::internal(format!("Failed to list tables: {e}"))
+        })?;
 
-        tracing::info!(tables_count = tables.len(), "ListTables request completed successfully");
+        tracing::info!(
+            tables_count = tables.len(),
+            "ListTables request completed successfully"
+        );
         Ok(Response::new(ListTablesResponse { tables }))
     }
 
@@ -653,7 +693,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         Ok(Response::new(reply))
     }
 
-    type PopulateTableIntervalStreamStream = ReceiverStream<Result<IntervalIterationResult, Status>>;
+    type PopulateTableIntervalStreamStream =
+        ReceiverStream<Result<IntervalIterationResult, Status>>;
 
     async fn populate_table_interval_stream(
         &self,
@@ -740,25 +781,22 @@ pub fn sanitize_and_map_records(
         .map(|record| {
             if let serde_json::Value::Object(mut map) = record {
                 // 1. Alias date / crime_date -> incident_date if allowed and missing
-                if allowed_keys.contains("incident_date") && !map.contains_key("incident_date") {
-                    if let Some(val) = map.remove("date").or_else(|| map.remove("crime_date")) {
+                if allowed_keys.contains("incident_date") && !map.contains_key("incident_date")
+                    && let Some(val) = map.remove("date").or_else(|| map.remove("crime_date")) {
                         map.insert("incident_date".to_string(), val);
                     }
-                }
 
                 // 2. Alias link / source_url -> url if allowed and missing
-                if allowed_keys.contains("url") && !map.contains_key("url") {
-                    if let Some(val) = map.remove("link").or_else(|| map.remove("source_url")) {
+                if allowed_keys.contains("url") && !map.contains_key("url")
+                    && let Some(val) = map.remove("link").or_else(|| map.remove("source_url")) {
                         map.insert("url".to_string(), val);
                     }
-                }
 
                 // 3. Alias query -> discovery_query if allowed and missing
-                if allowed_keys.contains("discovery_query") && !map.contains_key("discovery_query") {
-                    if let Some(val) = map.remove("query") {
+                if allowed_keys.contains("discovery_query") && !map.contains_key("discovery_query")
+                    && let Some(val) = map.remove("query") {
                         map.insert("discovery_query".to_string(), val);
                     }
-                }
 
                 // 4. Merge title / incident_title / headline into raw_text if raw_text is allowed but title is not
                 if allowed_keys.contains("raw_text") {
@@ -782,15 +820,14 @@ pub fn sanitize_and_map_records(
                         }
                     });
 
-                    if let Some(title) = title_val {
-                        if let Some(title_str) = title.as_str() {
+                    if let Some(title) = title_val
+                        && let Some(title_str) = title.as_str() {
                             if let Some(existing_raw) = map.get_mut("raw_text") {
-                                if let Some(raw_str) = existing_raw.as_str() {
-                                    if !raw_str.contains(title_str) {
+                                if let Some(raw_str) = existing_raw.as_str()
+                                    && !raw_str.contains(title_str) {
                                         *existing_raw =
                                             serde_json::json!(format!("{}: {}", title_str, raw_str));
                                     }
-                                }
                             } else {
                                 map.insert(
                                     "raw_text".to_string(),
@@ -798,7 +835,6 @@ pub fn sanitize_and_map_records(
                                 );
                             }
                         }
-                    }
                 }
 
                 // 5. Filter only allowed keys
@@ -820,4 +856,3 @@ pub fn sanitize_and_map_records(
         })
         .collect()
 }
-

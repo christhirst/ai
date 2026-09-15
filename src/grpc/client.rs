@@ -12,7 +12,9 @@ pub enum ClientAuth {
 }
 
 impl ClientAuth {
-    pub fn to_header_value(&self) -> Result<MetadataValue<tonic::metadata::Ascii>, Box<dyn std::error::Error>> {
+    pub fn to_header_value(
+        &self,
+    ) -> Result<MetadataValue<tonic::metadata::Ascii>, Box<dyn std::error::Error>> {
         match self {
             ClientAuth::Basic { user, pass } => {
                 let raw = format!("{user}:{pass}");
@@ -42,7 +44,8 @@ impl tonic::service::Interceptor for ClientAuthInterceptor {
     }
 }
 
-pub type AgentGrpcClient = TablePopulatorServiceClient<InterceptedService<Channel, ClientAuthInterceptor>>;
+pub type AgentGrpcClient =
+    TablePopulatorServiceClient<InterceptedService<Channel, ClientAuthInterceptor>>;
 
 /// Connects to a TablePopulator gRPC server without credentials.
 pub async fn connect_client(addr: &str) -> Result<AgentGrpcClient, Box<dyn std::error::Error>> {

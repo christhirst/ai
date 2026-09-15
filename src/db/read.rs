@@ -3,12 +3,28 @@ use crate::prompt_typed::{GdpRecord, Homecides};
 use surrealdb::{Connection, Surreal};
 
 pub trait DbReadable {
-    fn all_gdp_records(&self) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
-    fn gdp_records_by_year(&self, year: &str) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
-    fn all_homecides(&self) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
-    fn homecides_by_city(&self, city: &str) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
-    fn homecides_by_citizenship(&self, citizenship: &str) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
-    fn homecides_by_weapon(&self, weapon: &str) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn all_gdp_records(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
+    fn gdp_records_by_year(
+        &self,
+        year: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<GdpRecord>, Box<dyn std::error::Error>>> + Send;
+    fn all_homecides(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn homecides_by_city(
+        &self,
+        city: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn homecides_by_citizenship(
+        &self,
+        citizenship: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
+    fn homecides_by_weapon(
+        &self,
+        weapon: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Homecides>, Box<dyn std::error::Error>>> + Send;
 }
 
 impl<C: Connection + Send + Sync> DbReadable for Surreal<C> {
@@ -20,7 +36,10 @@ impl<C: Connection + Send + Sync> DbReadable for Surreal<C> {
         }
     }
 
-    async fn gdp_records_by_year(&self, year: &str) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn gdp_records_by_year(
+        &self,
+        year: &str,
+    ) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
         let mut response = self
             .query("SELECT * FROM gdp_record WHERE year = $year")
             .bind(("year", year.to_string()))
@@ -37,7 +56,10 @@ impl<C: Connection + Send + Sync> DbReadable for Surreal<C> {
         }
     }
 
-    async fn homecides_by_city(&self, city: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_city(
+        &self,
+        city: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         let mut response = self
             .query("SELECT * FROM homecides WHERE citiy = $city")
             .bind(("city", city.to_string()))
@@ -46,7 +68,10 @@ impl<C: Connection + Send + Sync> DbReadable for Surreal<C> {
         Ok(records)
     }
 
-    async fn homecides_by_citizenship(&self, citizenship: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_citizenship(
+        &self,
+        citizenship: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         let mut response = self
             .query("SELECT * FROM homecides WHERE Citizenship = $citizenship")
             .bind(("citizenship", citizenship.to_string()))
@@ -55,7 +80,10 @@ impl<C: Connection + Send + Sync> DbReadable for Surreal<C> {
         Ok(records)
     }
 
-    async fn homecides_by_weapon(&self, weapon: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_weapon(
+        &self,
+        weapon: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         let mut response = self
             .query("SELECT * FROM homecides WHERE weapon = $weapon")
             .bind(("weapon", weapon.to_string()))
@@ -77,7 +105,10 @@ impl DbReadable for AppDb {
         }
     }
 
-    async fn gdp_records_by_year(&self, year: &str) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
+    async fn gdp_records_by_year(
+        &self,
+        year: &str,
+    ) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.gdp_records_by_year(year).await,
             AppDb::Remote(remote) => {
@@ -100,7 +131,10 @@ impl DbReadable for AppDb {
         }
     }
 
-    async fn homecides_by_city(&self, city: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_city(
+        &self,
+        city: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.homecides_by_city(city).await,
             AppDb::Remote(remote) => {
@@ -113,7 +147,10 @@ impl DbReadable for AppDb {
         }
     }
 
-    async fn homecides_by_citizenship(&self, citizenship: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_citizenship(
+        &self,
+        citizenship: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.homecides_by_citizenship(citizenship).await,
             AppDb::Remote(remote) => {
@@ -126,7 +163,10 @@ impl DbReadable for AppDb {
         }
     }
 
-    async fn homecides_by_weapon(&self, weapon: &str) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+    async fn homecides_by_weapon(
+        &self,
+        weapon: &str,
+    ) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
         match self {
             AppDb::Local(local) => local.homecides_by_weapon(weapon).await,
             AppDb::Remote(remote) => {
@@ -141,7 +181,9 @@ impl DbReadable for AppDb {
 }
 
 /// Retrieves all `GdpRecord` entries from the database.
-pub async fn get_all_gdp_records<T: DbReadable>(db: &T) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
+pub async fn get_all_gdp_records<T: DbReadable>(
+    db: &T,
+) -> Result<Vec<GdpRecord>, Box<dyn std::error::Error>> {
     db.all_gdp_records().await
 }
 
@@ -154,7 +196,9 @@ pub async fn get_gdp_records_by_year<T: DbReadable>(
 }
 
 /// Retrieves all `Homecides` entries from the database.
-pub async fn get_all_homecides<T: DbReadable>(db: &T) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
+pub async fn get_all_homecides<T: DbReadable>(
+    db: &T,
+) -> Result<Vec<Homecides>, Box<dyn std::error::Error>> {
     db.all_homecides().await
 }
 

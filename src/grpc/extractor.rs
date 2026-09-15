@@ -4,6 +4,7 @@ use rig::providers::{gemini, openai};
 use serde_json::json;
 
 /// Extracts structured data from Gemini / Qwen / Rig conforming to the given table schema.
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_table_data(
     config: &AppConfig,
     prompt: &str,
@@ -20,7 +21,7 @@ pub async fn extract_table_data(
     let provider = match provider_override {
         Some(p) if !p.trim().is_empty() => p
             .parse::<ModelProvider>()
-            .map_err(|e| Box::<dyn std::error::Error>::from(e))?,
+            .map_err(Box::<dyn std::error::Error>::from)?,
         _ => config.provider,
     };
 
@@ -79,7 +80,9 @@ pub async fn extract_table_data(
             builder = builder.preamble(&system_instructions);
 
             // Validate thinking level if specified
-            let normalized_thinking_level = match thinking_level_override.map(|s| s.trim().to_lowercase()) {
+            let normalized_thinking_level = match thinking_level_override
+                .map(|s| s.trim().to_lowercase())
+            {
                 Some(s) if s.is_empty() => None,
                 Some(s) => match s.as_str() {
                     "minimal" | "low" | "medium" | "high" => Some(s),

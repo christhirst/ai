@@ -383,46 +383,44 @@ impl AppConfig {
 
         // If [qwen] table was configured in TOML, apply non-empty values
         if let Some(ref qwen) = config.qwen {
-            if let Some(ref url) = qwen.base_url {
-                if !url.trim().is_empty() {
-                    config.qwen_base_url = url.trim().to_string();
-                }
+            if let Some(ref url) = qwen.base_url
+                && !url.trim().is_empty()
+            {
+                config.qwen_base_url = url.trim().to_string();
             }
-            if let Some(ref key) = qwen.api_key {
-                if !key.trim().is_empty() {
-                    config.qwen_api_key = key.trim().to_string();
-                }
+            if let Some(ref key) = qwen.api_key
+                && !key.trim().is_empty()
+            {
+                config.qwen_api_key = key.trim().to_string();
             }
-            if let Some(ref qm) = qwen.model {
-                if !qm.trim().is_empty() {
-                    config.qwen_model = qm.trim().to_string();
-                }
+            if let Some(ref qm) = qwen.model
+                && !qm.trim().is_empty()
+            {
+                config.qwen_model = qm.trim().to_string();
             }
         }
 
         if let Ok(p) = std::env::var("PROVIDER")
             .or_else(|_| std::env::var("APP_PROVIDER"))
             .or_else(|_| std::env::var("AI_PROVIDER"))
+            && let Ok(provider) = p.parse::<ModelProvider>()
         {
-            if let Ok(provider) = p.parse::<ModelProvider>() {
-                config.provider = provider;
-            }
+            config.provider = provider;
         }
 
-        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-            if !key.trim().is_empty() {
-                config.gemini_api_key = key;
-            }
+        if let Ok(key) = std::env::var("GEMINI_API_KEY")
+            && !key.trim().is_empty()
+        {
+            config.gemini_api_key = key;
         }
 
         if let Ok(key) = std::env::var("QWEN_API_KEY")
             .or_else(|_| std::env::var("DASHSCOPE_API_KEY"))
             .or_else(|_| std::env::var("APP_QWEN_API_KEY"))
             .or_else(|_| std::env::var("APP_DASHSCOPE_API_KEY"))
+            && !key.trim().is_empty()
         {
-            if !key.trim().is_empty() {
-                config.qwen_api_key = key.trim().to_string();
-            }
+            config.qwen_api_key = key.trim().to_string();
         }
 
         if let Ok(base_url) = std::env::var("QWEN_BASE_URL")
@@ -430,19 +428,22 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_QWEN_BASE_URL"))
             .or_else(|_| std::env::var("QWEN_URL"))
             .or_else(|_| std::env::var("DASHSCOPE_URL"))
+            && !base_url.trim().is_empty()
         {
-            if !base_url.trim().is_empty() {
-                config.qwen_base_url = base_url.trim().to_string();
-            }
+            config.qwen_base_url = base_url.trim().to_string();
         }
 
         // Normalize qwen_base_url by stripping any trailing slash
-        config.qwen_base_url = config.qwen_base_url.trim().trim_end_matches('/').to_string();
+        config.qwen_base_url = config
+            .qwen_base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
 
-        if let Ok(qm) = std::env::var("QWEN_MODEL").or_else(|_| std::env::var("APP_QWEN_MODEL")) {
-            if !qm.trim().is_empty() {
-                config.qwen_model = qm.trim().to_string();
-            }
+        if let Ok(qm) = std::env::var("QWEN_MODEL").or_else(|_| std::env::var("APP_QWEN_MODEL"))
+            && !qm.trim().is_empty()
+        {
+            config.qwen_model = qm.trim().to_string();
         }
 
         if let Ok(pass) = std::env::var("SURREAL_PASS")
@@ -451,10 +452,9 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_SURREAL_PASS"))
             .or_else(|_| std::env::var("DB_PASSWORD"))
             .or_else(|_| std::env::var("APP_DB_PASSWORD"))
+            && !pass.trim().is_empty()
         {
-            if !pass.trim().is_empty() {
-                config.db.password = Some(pass);
-            }
+            config.db.password = Some(pass);
         }
 
         if let Ok(user) = std::env::var("SURREAL_USER")
@@ -464,10 +464,9 @@ impl AppConfig {
             .or_else(|_| std::env::var("DB_USERNAME"))
             .or_else(|_| std::env::var("DB_USER"))
             .or_else(|_| std::env::var("APP_DB_USER"))
+            && !user.trim().is_empty()
         {
-            if !user.trim().is_empty() {
-                config.db.username = Some(user);
-            }
+            config.db.username = Some(user);
         }
 
         if let Ok(endpoint) = std::env::var("SURREAL_URL")
@@ -476,10 +475,9 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_SURREAL_URL"))
             .or_else(|_| std::env::var("APP_SURREALDB_URL"))
             .or_else(|_| std::env::var("APP_DB_ENDPOINT"))
+            && !endpoint.trim().is_empty()
         {
-            if !endpoint.trim().is_empty() {
-                config.db.endpoint = endpoint;
-            }
+            config.db.endpoint = endpoint;
         }
 
         if let Ok(ns) = std::env::var("SURREAL_NS")
@@ -488,10 +486,9 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_SURREAL_NS"))
             .or_else(|_| std::env::var("DB_NAMESPACE"))
             .or_else(|_| std::env::var("APP_DB_NAMESPACE"))
+            && !ns.trim().is_empty()
         {
-            if !ns.trim().is_empty() {
-                config.db.namespace = ns;
-            }
+            config.db.namespace = ns;
         }
 
         if let Ok(db) = std::env::var("SURREAL_DB")
@@ -500,23 +497,21 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_SURREAL_DB"))
             .or_else(|_| std::env::var("DB_DATABASE"))
             .or_else(|_| std::env::var("APP_DB_DATABASE"))
+            && !db.trim().is_empty()
         {
-            if !db.trim().is_empty() {
-                config.db.database = db;
-            }
+            config.db.database = db;
         }
 
-        if let Ok(host) = std::env::var("GRPC_HOST").or_else(|_| std::env::var("APP_GRPC_HOST")) {
-            if !host.trim().is_empty() {
-                config.grpc.host = host;
-            }
+        if let Ok(host) = std::env::var("GRPC_HOST").or_else(|_| std::env::var("APP_GRPC_HOST"))
+            && !host.trim().is_empty()
+        {
+            config.grpc.host = host;
         }
 
         if let Ok(port_str) = std::env::var("GRPC_PORT").or_else(|_| std::env::var("APP_GRPC_PORT"))
+            && let Ok(port) = port_str.parse::<u16>()
         {
-            if let Ok(port) = port_str.parse::<u16>() {
-                config.grpc.port = port;
-            }
+            config.grpc.port = port;
         }
 
         if let Ok(admin_pw) = std::env::var("ADMIN_PASSWORD")
@@ -524,20 +519,18 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_ADMIN_PASSWORD"))
             .or_else(|_| std::env::var("APP_GRPC_ADMIN_PASSWORD"))
             .or_else(|_| std::env::var("APP_GRPC_AUTH_ADMIN_PASSWORD"))
+            && !admin_pw.trim().is_empty()
         {
-            if !admin_pw.trim().is_empty() {
-                config.grpc.auth.admin_password = Some(admin_pw.trim().to_string());
-            }
+            config.grpc.auth.admin_password = Some(admin_pw.trim().to_string());
         }
 
         if let Ok(admin_user) = std::env::var("ADMIN_USER")
             .or_else(|_| std::env::var("GRPC_ADMIN_USER"))
             .or_else(|_| std::env::var("APP_ADMIN_USER"))
             .or_else(|_| std::env::var("APP_GRPC_ADMIN_USER"))
+            && !admin_user.trim().is_empty()
         {
-            if !admin_user.trim().is_empty() {
-                config.grpc.auth.admin_user = admin_user.trim().to_string();
-            }
+            config.grpc.auth.admin_user = admin_user.trim().to_string();
         }
 
         if let Ok(auth_enabled) =
@@ -550,28 +543,25 @@ impl AppConfig {
         if let Ok(jwks) = std::env::var("OAUTH_JWKS_URL")
             .or_else(|_| std::env::var("GRPC_OAUTH_JWKS_URL"))
             .or_else(|_| std::env::var("APP_OAUTH_JWKS_URL"))
+            && !jwks.trim().is_empty()
         {
-            if !jwks.trim().is_empty() {
-                config.grpc.auth.oauth.jwks_url = Some(jwks.trim().to_string());
-            }
+            config.grpc.auth.oauth.jwks_url = Some(jwks.trim().to_string());
         }
 
         if let Ok(iss) = std::env::var("OAUTH_ISSUER")
             .or_else(|_| std::env::var("GRPC_OAUTH_ISSUER"))
             .or_else(|_| std::env::var("APP_OAUTH_ISSUER"))
+            && !iss.trim().is_empty()
         {
-            if !iss.trim().is_empty() {
-                config.grpc.auth.oauth.issuer = Some(iss.trim().to_string());
-            }
+            config.grpc.auth.oauth.issuer = Some(iss.trim().to_string());
         }
 
         if let Ok(aud) = std::env::var("OAUTH_AUDIENCE")
             .or_else(|_| std::env::var("GRPC_OAUTH_AUDIENCE"))
             .or_else(|_| std::env::var("APP_OAUTH_AUDIENCE"))
+            && !aud.trim().is_empty()
         {
-            if !aud.trim().is_empty() {
-                config.grpc.auth.oauth.audience = Some(aud.trim().to_string());
-            }
+            config.grpc.auth.oauth.audience = Some(aud.trim().to_string());
         }
 
         if let Ok(secret) = std::env::var("OAUTH_JWT_SECRET")
@@ -579,19 +569,17 @@ impl AppConfig {
             .or_else(|_| std::env::var("APP_OAUTH_JWT_SECRET"))
             .or_else(|_| std::env::var("AI_GRPC_OAUTH_SECRET"))
             .or_else(|_| std::env::var("GRPC_OAUTH_SECRET"))
+            && !secret.trim().is_empty()
         {
-            if !secret.trim().is_empty() {
-                config.grpc.auth.oauth.jwt_secret = Some(secret.trim().to_string());
-            }
+            config.grpc.auth.oauth.jwt_secret = Some(secret.trim().to_string());
         }
 
         if let Ok(pub_key) = std::env::var("OAUTH_JWT_PUBLIC_KEY")
             .or_else(|_| std::env::var("GRPC_OAUTH_JWT_PUBLIC_KEY"))
             .or_else(|_| std::env::var("APP_OAUTH_JWT_PUBLIC_KEY"))
+            && !pub_key.trim().is_empty()
         {
-            if !pub_key.trim().is_empty() {
-                config.grpc.auth.oauth.jwt_public_key = Some(pub_key.trim().to_string());
-            }
+            config.grpc.auth.oauth.jwt_public_key = Some(pub_key.trim().to_string());
         }
 
         if let Ok(enabled_str) = std::env::var("VAULT_ENABLED")
@@ -606,55 +594,49 @@ impl AppConfig {
             .or_else(|_| std::env::var("OPENBAO_ADDR"))
             .or_else(|_| std::env::var("APP_VAULT_ADDR"))
             .or_else(|_| std::env::var("APP_VAULT_ADDRESS"))
+            && !addr.trim().is_empty()
         {
-            if !addr.trim().is_empty() {
-                config.vault.address = addr.trim().to_string();
-            }
+            config.vault.address = addr.trim().to_string();
         }
 
         if let Ok(token) = std::env::var("VAULT_TOKEN")
             .or_else(|_| std::env::var("OPENBAO_TOKEN"))
             .or_else(|_| std::env::var("APP_VAULT_TOKEN"))
+            && !token.trim().is_empty()
         {
-            if !token.trim().is_empty() {
-                config.vault.token = Some(token.trim().to_string());
-            }
+            config.vault.token = Some(token.trim().to_string());
         }
 
         if let Ok(mount) = std::env::var("VAULT_MOUNT")
             .or_else(|_| std::env::var("OPENBAO_MOUNT"))
             .or_else(|_| std::env::var("APP_VAULT_MOUNT"))
+            && !mount.trim().is_empty()
         {
-            if !mount.trim().is_empty() {
-                config.vault.mount = mount.trim().to_string();
-            }
+            config.vault.mount = mount.trim().to_string();
         }
 
         if let Ok(path) = std::env::var("VAULT_PATH")
             .or_else(|_| std::env::var("OPENBAO_PATH"))
             .or_else(|_| std::env::var("APP_VAULT_PATH"))
+            && !path.trim().is_empty()
         {
-            if !path.trim().is_empty() {
-                config.vault.path = path.trim().to_string();
-            }
+            config.vault.path = path.trim().to_string();
         }
 
         if let Ok(ns) = std::env::var("VAULT_NAMESPACE")
             .or_else(|_| std::env::var("OPENBAO_NAMESPACE"))
             .or_else(|_| std::env::var("APP_VAULT_NAMESPACE"))
+            && !ns.trim().is_empty()
         {
-            if !ns.trim().is_empty() {
-                config.vault.namespace = Some(ns.trim().to_string());
-            }
+            config.vault.namespace = Some(ns.trim().to_string());
         }
 
         if let Ok(ver_str) = std::env::var("VAULT_KV_VERSION")
             .or_else(|_| std::env::var("OPENBAO_KV_VERSION"))
             .or_else(|_| std::env::var("APP_VAULT_KV_VERSION"))
+            && let Ok(ver) = ver_str.trim().parse::<u32>()
         {
-            if let Ok(ver) = ver_str.trim().parse::<u32>() {
-                config.vault.kv_version = ver;
-            }
+            config.vault.kv_version = ver;
         }
 
         if let Ok(auto_renew_str) = std::env::var("VAULT_AUTO_RENEW")
@@ -668,10 +650,9 @@ impl AppConfig {
         if let Ok(inc) = std::env::var("VAULT_RENEW_INCREMENT")
             .or_else(|_| std::env::var("OPENBAO_RENEW_INCREMENT"))
             .or_else(|_| std::env::var("APP_VAULT_RENEW_INCREMENT"))
+            && !inc.trim().is_empty()
         {
-            if !inc.trim().is_empty() {
-                config.vault.renew_increment = Some(inc.trim().to_string());
-            }
+            config.vault.renew_increment = Some(inc.trim().to_string());
         }
 
         Ok(config)
@@ -687,12 +668,11 @@ impl AppConfig {
 
         let extract_str = |keys: &[String]| -> Option<String> {
             for key in keys {
-                if let Some(val) = secret_map.get(key) {
-                    if let Some(s) = val.as_str() {
-                        if !s.is_empty() {
-                            return Some(s.to_string());
-                        }
-                    }
+                if let Some(val) = secret_map.get(key)
+                    && let Some(s) = val.as_str()
+                    && !s.is_empty()
+                {
+                    return Some(s.to_string());
                 }
             }
             None
@@ -742,28 +722,27 @@ impl AppConfig {
             let extract_nested = |keys: &[String]| -> Option<String> {
                 for key in keys {
                     let bare_key = key.strip_prefix("db_").unwrap_or(key.as_str());
-                    if let Some(val) = db_val.get(key).or_else(|| db_val.get(bare_key)) {
-                        if let Some(s) = val.as_str() {
-                            if !s.is_empty() {
-                                return Some(s.to_string());
-                            }
-                        }
+                    if let Some(val) = db_val.get(key).or_else(|| db_val.get(bare_key))
+                        && let Some(s) = val.as_str()
+                        && !s.is_empty()
+                    {
+                        return Some(s.to_string());
                     }
                 }
                 None
             };
 
-            if self.db.password.is_none() {
-                if let Some(pass) = extract_nested(&self.vault.keys.ai_db_password) {
-                    self.db.password = Some(pass);
-                    count += 1;
-                }
+            if self.db.password.is_none()
+                && let Some(pass) = extract_nested(&self.vault.keys.ai_db_password)
+            {
+                self.db.password = Some(pass);
+                count += 1;
             }
-            if self.db.username.is_none() {
-                if let Some(user) = extract_nested(&self.vault.keys.ai_db_username) {
-                    self.db.username = Some(user);
-                    count += 1;
-                }
+            if self.db.username.is_none()
+                && let Some(user) = extract_nested(&self.vault.keys.ai_db_username)
+            {
+                self.db.username = Some(user);
+                count += 1;
             }
             if let Some(endpoint) = extract_nested(&self.vault.keys.ai_db_endpoint) {
                 self.db.endpoint = endpoint;
@@ -813,12 +792,11 @@ impl AppConfig {
                         .get(key)
                         .or_else(|| auth_val.get(bare_key))
                         .and_then(|v| v.as_str())
+                        && !p.is_empty()
                     {
-                        if !p.is_empty() {
-                            self.grpc.auth.admin_password = Some(p.to_string());
-                            count += 1;
-                            break;
-                        }
+                        self.grpc.auth.admin_password = Some(p.to_string());
+                        count += 1;
+                        break;
                     }
                 }
             }
@@ -834,12 +812,11 @@ impl AppConfig {
                         .get(key)
                         .or_else(|| auth_val.get(bare_key))
                         .and_then(|v| v.as_str())
+                        && !s.is_empty()
                     {
-                        if !s.is_empty() {
-                            self.grpc.auth.oauth.client_id = Some(s.to_string());
-                            count += 1;
-                            break;
-                        }
+                        self.grpc.auth.oauth.client_id = Some(s.to_string());
+                        count += 1;
+                        break;
                     }
                 }
             }
@@ -855,18 +832,17 @@ impl AppConfig {
                         .get(key)
                         .or_else(|| auth_val.get(bare_key))
                         .and_then(|v| v.as_str())
+                        && !s.is_empty()
                     {
-                        if !s.is_empty() {
-                            self.grpc.auth.oauth.client_secret = Some(s.to_string());
-                            if self.grpc.auth.oauth.jwt_secret.is_none()
-                                && self.grpc.auth.oauth.well_known_url.is_none()
-                                && self.grpc.auth.oauth.jwks_url.is_none()
-                            {
-                                self.grpc.auth.oauth.jwt_secret = Some(s.to_string());
-                            }
-                            count += 1;
-                            break;
+                        self.grpc.auth.oauth.client_secret = Some(s.to_string());
+                        if self.grpc.auth.oauth.jwt_secret.is_none()
+                            && self.grpc.auth.oauth.well_known_url.is_none()
+                            && self.grpc.auth.oauth.jwks_url.is_none()
+                        {
+                            self.grpc.auth.oauth.jwt_secret = Some(s.to_string());
                         }
+                        count += 1;
+                        break;
                     }
                 }
             }
@@ -888,22 +864,20 @@ impl AppConfig {
                         .or_else(|| qwen_val.get(bare_key))
                         .or_else(|| bare_key.strip_prefix("api_").and_then(|k| qwen_val.get(k)))
                         .or_else(|| bare_key.strip_prefix("base_").and_then(|k| qwen_val.get(k)))
+                        && let Some(s) = val.as_str()
+                        && !s.is_empty()
                     {
-                        if let Some(s) = val.as_str() {
-                            if !s.is_empty() {
-                                return Some(s.to_string());
-                            }
-                        }
+                        return Some(s.to_string());
                     }
                 }
                 None
             };
 
-            if self.qwen_api_key.is_empty() {
-                if let Some(key) = extract_nested(&self.vault.keys.qwen_api_key) {
-                    self.qwen_api_key = key;
-                    count += 1;
-                }
+            if self.qwen_api_key.is_empty()
+                && let Some(key) = extract_nested(&self.vault.keys.qwen_api_key)
+            {
+                self.qwen_api_key = key;
+                count += 1;
             }
             if let Some(url) = extract_nested(&self.vault.keys.qwen_base_url) {
                 self.qwen_base_url = url.trim().trim_end_matches('/').to_string();
@@ -1381,14 +1355,38 @@ static_tokens = ["token1", "token2"]
 
     #[test]
     fn test_model_provider_parsing_and_display() {
-        assert_eq!("gemini".parse::<ModelProvider>().unwrap(), ModelProvider::Gemini);
-        assert_eq!("google".parse::<ModelProvider>().unwrap(), ModelProvider::Gemini);
-        assert_eq!("GEMINI".parse::<ModelProvider>().unwrap(), ModelProvider::Gemini);
-        assert_eq!("qwen".parse::<ModelProvider>().unwrap(), ModelProvider::Qwen);
-        assert_eq!("dashscope".parse::<ModelProvider>().unwrap(), ModelProvider::Qwen);
-        assert_eq!("aliyun".parse::<ModelProvider>().unwrap(), ModelProvider::Qwen);
-        assert_eq!("alibaba".parse::<ModelProvider>().unwrap(), ModelProvider::Qwen);
-        assert_eq!("QWEN".parse::<ModelProvider>().unwrap(), ModelProvider::Qwen);
+        assert_eq!(
+            "gemini".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Gemini
+        );
+        assert_eq!(
+            "google".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Gemini
+        );
+        assert_eq!(
+            "GEMINI".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Gemini
+        );
+        assert_eq!(
+            "qwen".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Qwen
+        );
+        assert_eq!(
+            "dashscope".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Qwen
+        );
+        assert_eq!(
+            "aliyun".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Qwen
+        );
+        assert_eq!(
+            "alibaba".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Qwen
+        );
+        assert_eq!(
+            "QWEN".parse::<ModelProvider>().unwrap(),
+            ModelProvider::Qwen
+        );
 
         assert!("invalid_provider".parse::<ModelProvider>().is_err());
 
@@ -1481,7 +1479,10 @@ api_key = "sk-coding-plan-key"
         }
 
         assert_eq!(config.provider, ModelProvider::Qwen);
-        assert_eq!(config.qwen_base_url, "https://coding.dashscope.aliyuncs.com/v1");
+        assert_eq!(
+            config.qwen_base_url,
+            "https://coding.dashscope.aliyuncs.com/v1"
+        );
         assert_eq!(config.qwen_model, "qwen-turbo");
         assert_eq!(config.qwen_api_key, "sk-coding-plan-key");
     }
@@ -1498,7 +1499,10 @@ qwen_url = "https://coding.dashscope.aliyuncs.com/v1"
             .build()
             .unwrap();
         let config: AppConfig = c.try_deserialize().unwrap();
-        assert_eq!(config.qwen_base_url, "https://coding.dashscope.aliyuncs.com/v1");
+        assert_eq!(
+            config.qwen_base_url,
+            "https://coding.dashscope.aliyuncs.com/v1"
+        );
     }
 
     #[test]
@@ -1513,7 +1517,10 @@ qwen_url = "https://coding.dashscope.aliyuncs.com/v1"
         let count = config.apply_secret_data(secret_json.as_object().unwrap());
         assert_eq!(count, 2);
         assert_eq!(config.qwen_api_key, "sk-flat-key");
-        assert_eq!(config.qwen_base_url, "https://coding.dashscope.aliyuncs.com/v1");
+        assert_eq!(
+            config.qwen_base_url,
+            "https://coding.dashscope.aliyuncs.com/v1"
+        );
 
         // Nested qwen object
         let mut config2 = AppConfig::default();
@@ -1527,6 +1534,9 @@ qwen_url = "https://coding.dashscope.aliyuncs.com/v1"
         let count2 = config2.apply_secret_data(nested_json.as_object().unwrap());
         assert_eq!(count2, 2);
         assert_eq!(config2.qwen_api_key, "sk-nested-key");
-        assert_eq!(config2.qwen_base_url, "https://coding.dashscope.aliyuncs.com/v1");
+        assert_eq!(
+            config2.qwen_base_url,
+            "https://coding.dashscope.aliyuncs.com/v1"
+        );
     }
 }

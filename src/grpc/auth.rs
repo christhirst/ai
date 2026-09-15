@@ -1,15 +1,15 @@
-use crate::config::{default_admin_user, GrpcAuthConfig};
+use crate::config::{GrpcAuthConfig, default_admin_user};
 use base64::Engine;
 use http::HeaderMap;
 use jsonwebtoken::jwk::JwkSet;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tonic::Status;
 use tonic::body::Body;
 use tonic::codegen::http::Request;
-use tonic::Status;
 use tonic_middleware::{RequestInterceptor, RequestInterceptorLayer};
 
 /// Represents the authenticated identity of a gRPC caller.
@@ -41,20 +41,20 @@ impl JwksCache {
     async fn get_keys(&self, client: &reqwest::Client, url: &str) -> Result<JwkSet, Status> {
         {
             let read_lock = self.keys.read().await;
-            if let Some((ref jwks, fetched_at)) = *read_lock {
-                if fetched_at.elapsed() < self.ttl {
-                    return Ok(jwks.clone());
-                }
+            if let Some((ref jwks, fetched_at)) = *read_lock
+                && fetched_at.elapsed() < self.ttl
+            {
+                return Ok(jwks.clone());
             }
         }
 
         // Cache miss or expired: fetch fresh JWKS
         let mut write_lock = self.keys.write().await;
         // Double-check after acquiring write lock
-        if let Some((ref jwks, fetched_at)) = *write_lock {
-            if fetched_at.elapsed() < self.ttl {
-                return Ok(jwks.clone());
-            }
+        if let Some((ref jwks, fetched_at)) = *write_lock
+            && fetched_at.elapsed() < self.ttl
+        {
+            return Ok(jwks.clone());
         }
 
         let resp = client
@@ -116,17 +116,30 @@ impl AuthValidator {
     }
 
     /// Validates an authorization header value string.
-    pub async fn validate_auth_header(&self, auth_header: Option<&str>) -> Result<AuthIdentity, Status> {
+    pub async fn validate_auth_header(
+        &self,
+        auth_header: Option<&str>,
+    ) -> Result<AuthIdentity, Status> {
         let header = match auth_header {
             Some(h) if !h.trim().is_empty() => h.trim(),
-            _ => return Err(Status::unauthenticated("Missing authorization metadata in request")),
+            _ => {
+                return Err(Status::unauthenticated(
+                    "Missing authorization metadata in request",
+                ));
+            }
         };
 
-        if let Some(basic_part) = header.strip_prefix("Basic ").or_else(|| header.strip_prefix("basic ")) {
+        if let Some(basic_part) = header
+            .strip_prefix("Basic ")
+            .or_else(|| header.strip_prefix("basic "))
+        {
             return self.validate_basic_auth(basic_part.trim());
         }
 
-        if let Some(bearer_part) = header.strip_prefix("Bearer ").or_else(|| header.strip_prefix("bearer ")) {
+        if let Some(bearer_part) = header
+            .strip_prefix("Bearer ")
+            .or_else(|| header.strip_prefix("bearer "))
+        {
             return self.validate_bearer_token(bearer_part.trim()).await;
         }
 
@@ -137,13 +150,13 @@ impl AuthValidator {
 
     /// Validates an incoming HTTP HeaderMap.
     pub async fn validate_headers(&self, headers: &HeaderMap) -> Result<AuthIdentity, Status> {
-        let auth_str = match headers.get("authorization") {
-            Some(v) => Some(
-                v.to_str()
-                    .map_err(|_| Status::unauthenticated("Invalid authorization header encoding"))?,
-            ),
-            None => None,
-        };
+        let auth_str =
+            match headers.get("authorization") {
+                Some(v) => Some(v.to_str().map_err(|_| {
+                    Status::unauthenticated("Invalid authorization header encoding")
+                })?),
+                None => None,
+            };
 
         self.validate_auth_header(auth_str).await
     }
@@ -166,9 +179,9 @@ impl AuthValidator {
         let credentials = String::from_utf8(decoded_bytes)
             .map_err(|_| Status::unauthenticated("Invalid UTF-8 in decoded Basic credentials"))?;
 
-        let (user, pass) = credentials
-            .split_once(':')
-            .ok_or_else(|| Status::unauthenticated("Malformed Basic credentials: expected user:password"))?;
+        let (user, pass) = credentials.split_once(':').ok_or_else(|| {
+            Status::unauthenticated("Malformed Basic credentials: expected user:password")
+        })?;
 
         if user == self.admin_user && pass == expected_password {
             Ok(AuthIdentity::Admin(user.to_string()))
@@ -188,8 +201,9 @@ impl AuthValidator {
         }
 
         // 2. Parse JWT Header
-        let header = decode_header(token)
-            .map_err(|e| Status::unauthenticated(format!("Invalid JWT header in Bearer token: {e}")))?;
+        let header = decode_header(token).map_err(|e| {
+            Status::unauthenticated(format!("Invalid JWT header in Bearer token: {e}"))
+        })?;
 
         // Prepare validation rules
         let mut validation = Validation::new(header.alg);
@@ -222,30 +236,48 @@ impl AuthValidator {
         let claims = if is_asymmetric {
             if let Some(ref jwks_url) = self.jwks_url {
                 // JWKS Endpoint
-                let jwks = self.jwks_cache.get_keys(&self.http_client, jwks_url).await?;
+                let jwks = self
+                    .jwks_cache
+                    .get_keys(&self.http_client, jwks_url)
+                    .await?;
                 let kid = header.kid.as_deref().ok_or_else(|| {
-                    Status::unauthenticated("JWT token is missing 'kid' header required for JWKS verification")
+                    Status::unauthenticated(
+                        "JWT token is missing 'kid' header required for JWKS verification",
+                    )
                 })?;
 
-                let jwk = jwks
-                    .find(kid)
-                    .ok_or_else(|| Status::unauthenticated(format!("Key ID '{kid}' not found in JWKS from {jwks_url}")))?;
+                let jwk = jwks.find(kid).ok_or_else(|| {
+                    Status::unauthenticated(format!(
+                        "Key ID '{kid}' not found in JWKS from {jwks_url}"
+                    ))
+                })?;
 
-                let key = DecodingKey::from_jwk(jwk)
-                    .map_err(|e| Status::internal(format!("Failed to construct DecodingKey from JWK '{kid}': {e}")))?;
+                let key = DecodingKey::from_jwk(jwk).map_err(|e| {
+                    Status::internal(format!(
+                        "Failed to construct DecodingKey from JWK '{kid}': {e}"
+                    ))
+                })?;
 
                 decode::<serde_json::Value>(token, &key, &validation)
-                    .map_err(|e| Status::unauthenticated(format!("JWT validation failed (JWKS key '{kid}'): {e}")))?
+                    .map_err(|e| {
+                        Status::unauthenticated(format!(
+                            "JWT validation failed (JWKS key '{kid}'): {e}"
+                        ))
+                    })?
                     .claims
             } else if let Some(ref pem_key) = self.jwt_public_key {
                 // PEM Public Key (RSA or EC)
                 let key = DecodingKey::from_rsa_pem(pem_key.as_bytes())
                     .or_else(|_| DecodingKey::from_ec_pem(pem_key.as_bytes()))
                     .or_else(|_| DecodingKey::from_ed_pem(pem_key.as_bytes()))
-                    .map_err(|e| Status::internal(format!("Failed to parse configured JWT public key: {e}")))?;
+                    .map_err(|e| {
+                        Status::internal(format!("Failed to parse configured JWT public key: {e}"))
+                    })?;
 
                 decode::<serde_json::Value>(token, &key, &validation)
-                    .map_err(|e| Status::unauthenticated(format!("JWT validation failed (Public Key): {e}")))?
+                    .map_err(|e| {
+                        Status::unauthenticated(format!("JWT validation failed (Public Key): {e}"))
+                    })?
                     .claims
             } else {
                 return Err(Status::unauthenticated(format!(
@@ -257,7 +289,9 @@ impl AuthValidator {
             // HMAC Shared Secret (HS256/384/512)
             let key = DecodingKey::from_secret(secret.as_bytes());
             decode::<serde_json::Value>(token, &key, &validation)
-                .map_err(|e| Status::unauthenticated(format!("JWT validation failed (HMAC secret): {e}")))?
+                .map_err(|e| {
+                    Status::unauthenticated(format!("JWT validation failed (HMAC secret): {e}"))
+                })?
                 .claims
         } else {
             return Err(Status::unauthenticated(
@@ -319,11 +353,10 @@ pub async fn discover_oidc_endpoints(
     client: &reqwest::Client,
     well_known_url: &str,
 ) -> Result<OidcDiscoveryDocument, Box<dyn std::error::Error>> {
-    let resp = client
-        .get(well_known_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to OIDC discovery URL '{well_known_url}': {e}"))?;
+    let resp =
+        client.get(well_known_url).send().await.map_err(|e| {
+            format!("Failed to connect to OIDC discovery URL '{well_known_url}': {e}")
+        })?;
 
     if !resp.status().is_success() {
         return Err(format!(
@@ -479,7 +512,7 @@ pub async fn check_oauth_at_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{EncodingKey, Header, encode};
 
     #[tokio::test]
     async fn test_basic_auth_valid() {
@@ -511,7 +544,10 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode("admin:wrong_password");
         let header = format!("Basic {encoded}");
 
-        let err = validator.validate_auth_header(Some(&header)).await.unwrap_err();
+        let err = validator
+            .validate_auth_header(Some(&header))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
         assert!(err.message().contains("Invalid basic auth credentials"));
     }
@@ -529,7 +565,10 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode("attacker:secret123");
         let header = format!("Basic {encoded}");
 
-        let err = validator.validate_auth_header(Some(&header)).await.unwrap_err();
+        let err = validator
+            .validate_auth_header(Some(&header))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
         assert!(err.message().contains("Invalid basic auth credentials"));
     }
@@ -607,7 +646,10 @@ mod tests {
         .unwrap();
 
         let header = format!("Bearer {token}");
-        let err = validator.validate_auth_header(Some(&header)).await.unwrap_err();
+        let err = validator
+            .validate_auth_header(Some(&header))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
         assert!(err.message().contains("ExpiredSignature"));
     }

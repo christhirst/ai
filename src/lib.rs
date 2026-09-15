@@ -11,8 +11,8 @@ pub use config::{
 };
 pub use db::{AppDb, LocalDb};
 pub use grpc::{
-    connect_client, start_grpc_server, AgentGrpcClient, PopulateTableRequest, PopulateTableResponse,
-    TablePopulatorService, TablePopulatorServiceServer, TablePopulatorServiceImpl,
+    AgentGrpcClient, PopulateTableRequest, PopulateTableResponse, TablePopulatorService,
+    TablePopulatorServiceImpl, TablePopulatorServiceServer, connect_client, start_grpc_server,
 };
 pub use prompt_typed::{GdpRecord, Homecides};
 use rig::providers::gemini;

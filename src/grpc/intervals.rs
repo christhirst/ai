@@ -152,8 +152,9 @@ pub fn generate_interval_steps(
             }
         }
         IntervalType::Monthly => {
-            let mut curr_month_start = NaiveDate::from_ymd_opt(start_date.year(), start_date.month(), 1)
-                .ok_or_else(|| "Failed to construct month start date".to_string())?;
+            let mut curr_month_start =
+                NaiveDate::from_ymd_opt(start_date.year(), start_date.month(), 1)
+                    .ok_or_else(|| "Failed to construct month start date".to_string())?;
 
             while curr_month_start <= end_date {
                 let next_month_start = match curr_month_start.checked_add_months(Months::new(1)) {
@@ -363,7 +364,8 @@ mod tests {
 
     #[test]
     fn test_inject_timeframe_into_prompt_placeholder() {
-        let template = "Task:\n- Location: \"Germany\"\n- Timeframe: \"{{timeframe}}\"\n- Scope: Crime";
+        let template =
+            "Task:\n- Location: \"Germany\"\n- Timeframe: \"{{timeframe}}\"\n- Scope: Crime";
         let res = inject_timeframe_into_prompt(template, "2000-05");
         assert!(res.contains("- Timeframe: \"2000-05\""));
         assert!(!res.contains("{{timeframe}}"));
@@ -371,7 +373,8 @@ mod tests {
 
     #[test]
     fn test_inject_timeframe_into_prompt_replaces_existing() {
-        let template = "### Target Task:\n- Location: \"Germany\"\n- Timeframe: \"2000-02\"\n- Scope: Crime";
+        let template =
+            "### Target Task:\n- Location: \"Germany\"\n- Timeframe: \"2000-02\"\n- Scope: Crime";
         let res = inject_timeframe_into_prompt(template, "2000-06");
         assert!(res.contains("- Timeframe: \"2000-06\""));
         assert!(!res.contains("2000-02"));
@@ -381,13 +384,18 @@ mod tests {
     fn test_inject_timeframe_into_prompt_inserts_under_header() {
         let template = "### Target Task:\n- Location: \"Germany\"\n- Scope: Crime";
         let res = inject_timeframe_into_prompt(template, "2000-07");
-        assert!(res.contains("### Target Task:\n- Timeframe: \"2000-07\"\n- Location: \"Germany\""));
+        assert!(
+            res.contains("### Target Task:\n- Timeframe: \"2000-07\"\n- Location: \"Germany\"")
+        );
     }
 
     #[test]
     fn test_inject_timeframe_into_prompt_prepends_fallback() {
         let template = "Please find crime news articles.";
         let res = inject_timeframe_into_prompt(template, "2000-08");
-        assert_eq!(res, "- Timeframe: \"2000-08\"\n\nPlease find crime news articles.");
+        assert_eq!(
+            res,
+            "- Timeframe: \"2000-08\"\n\nPlease find crime news articles."
+        );
     }
 }
