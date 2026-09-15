@@ -1,31 +1,42 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ModelProvider};
 use rig::prelude::*;
-use rig::providers::gemini;
+use rig::providers::{gemini, openai};
 use serde_json::json;
 
-/// Extracts structured data from Gemini / Rig conforming to the given table schema.
+/// Extracts structured data from Gemini / Qwen / Rig conforming to the given table schema.
 pub async fn extract_table_data(
     config: &AppConfig,
     prompt: &str,
     table_name: &str,
     fields: &[String],
+    provider_override: Option<&str>,
     model_override: Option<&str>,
     temperature_override: Option<f64>,
     preamble_override: Option<&str>,
     enable_grounding: bool,
     thinking_level_override: Option<&str>,
+    base_url_override: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
-    let model = model_override.unwrap_or(&config.model);
+    let provider = match provider_override {
+        Some(p) if !p.trim().is_empty() => p
+            .parse::<ModelProvider>()
+            .map_err(|e| Box::<dyn std::error::Error>::from(e))?,
+        _ => config.provider,
+    };
 
-    // Enforce Gemini 3+ models only; older legacy models are prevented
-    if !model.contains("gemini-3") {
-        return Err(format!(
-            "Unsupported model '{model}': only Gemini 3+ models (e.g. gemini-3.7-flash, gemini-3.8-flash) are supported."
-        ).into());
-    }
-
-    let client = gemini::Client::new(&config.gemini_api_key)?;
-    let mut builder = client.agent(model);
+    let model = match model_override.filter(|m| !m.trim().is_empty()) {
+        Some(m) => m,
+        None => match provider {
+            ModelProvider::Gemini => &config.model,
+            ModelProvider::Qwen => {
+                if config.model.contains("gemini") {
+                    &config.qwen_model
+                } else {
+                    &config.model
+                }
+            }
+        },
+    };
 
     // Build structured field specification and example template
     let field_spec = build_schema_prompt_section(table_name, fields);
@@ -50,69 +61,133 @@ pub async fn extract_table_data(
         5. If no records or incidents are found matching the criteria for the specified timeframe, return an empty JSON array: `[]`. Do NOT return empty text or any conversational explanation."
     );
 
-    builder = builder.preamble(&system_instructions);
-
-    // Validate thinking level if specified
-    let normalized_thinking_level = match thinking_level_override.map(|s| s.trim().to_lowercase()) {
-        Some(s) if s.is_empty() => None,
-        Some(s) => match s.as_str() {
-            "minimal" | "low" | "medium" | "high" => Some(s),
-            other => {
+    let raw_response = match provider {
+        ModelProvider::Gemini => {
+            // Enforce Gemini 3+ models only; older legacy models are prevented
+            if !model.contains("gemini-3") {
                 return Err(format!(
-                    "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
+                    "Unsupported model '{model}': only Gemini 3+ models (e.g. gemini-3.7-flash, gemini-3.8-flash) are supported for Gemini provider."
                 ).into());
             }
-        },
-        None => None,
+
+            if config.gemini_api_key.trim().is_empty() {
+                return Err("Gemini API key is not configured. Please set GEMINI_API_KEY, gemini_api_key in config, or OpenBao/Vault".into());
+            }
+
+            let client = gemini::Client::new(&config.gemini_api_key)?;
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            // Validate thinking level if specified
+            let normalized_thinking_level = match thinking_level_override.map(|s| s.trim().to_lowercase()) {
+                Some(s) if s.is_empty() => None,
+                Some(s) => match s.as_str() {
+                    "minimal" | "low" | "medium" | "high" => Some(s),
+                    other => {
+                        return Err(format!(
+                            "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
+                        ).into());
+                    }
+                },
+                None => None,
+            };
+
+            // Default to "low" if grounding is enabled and no thinking level is explicitly provided,
+            // to prevent runaway 10,000+ token thought loops that exhaust the turn.
+            let effective_thinking_level = match (normalized_thinking_level, enable_grounding) {
+                (Some(level), _) => Some(level),
+                (None, true) => Some("low".to_string()),
+                (None, false) => None,
+            };
+
+            let mut additional_params = serde_json::Map::new();
+
+            if enable_grounding {
+                additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+            }
+
+            let mut gen_config = serde_json::Map::new();
+            if let Some(level) = effective_thinking_level {
+                gen_config.insert(
+                    "thinkingConfig".to_string(),
+                    json!({"thinkingLevel": level}),
+                );
+            }
+
+            if !gen_config.is_empty() {
+                additional_params.insert(
+                    "generationConfig".to_string(),
+                    serde_json::Value::Object(gen_config),
+                );
+            }
+
+            if !additional_params.is_empty() {
+                builder = builder.additional_params(serde_json::Value::Object(additional_params));
+            }
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = "gemini",
+                model = %model,
+                table = %table_name,
+                "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
+            );
+
+            agent.prompt(prompt).await?
+        }
+        ModelProvider::Qwen => {
+            if config.qwen_api_key.trim().is_empty() {
+                return Err("Qwen API key is not configured. Please set QWEN_API_KEY / DASHSCOPE_API_KEY, qwen_api_key in config, or OpenBao/Vault".into());
+            }
+
+            let effective_base_url = base_url_override
+                .map(|u| u.trim().trim_end_matches('/'))
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| config.qwen_base_url.trim_end_matches('/'));
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(&config.qwen_api_key)
+                .base_url(effective_base_url)
+                .build()?;
+
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            if enable_grounding {
+                builder = builder.additional_params(json!({
+                    "enable_search": true
+                }));
+            }
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = "qwen",
+                model = %model,
+                base_url = %effective_base_url,
+                table = %table_name,
+                "PopulateTable-Agent: requesting structured data extraction from Qwen agent"
+            );
+
+            agent.prompt(prompt).await?
+        }
     };
 
-    // Default to "low" if grounding is enabled and no thinking level is explicitly provided,
-    // to prevent runaway 10,000+ token thought loops that exhaust the turn.
-    let effective_thinking_level = match (normalized_thinking_level, enable_grounding) {
-        (Some(level), _) => Some(level),
-        (None, true) => Some("low".to_string()),
-        (None, false) => None,
-    };
-
-    let mut additional_params = serde_json::Map::new();
-
-    if enable_grounding {
-        additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
-    }
-
-    let mut gen_config = serde_json::Map::new();
-    if let Some(level) = effective_thinking_level {
-        gen_config.insert("thinkingConfig".to_string(), json!({"thinkingLevel": level}));
-    }
-
-    if !gen_config.is_empty() {
-        additional_params.insert(
-            "generationConfig".to_string(),
-            serde_json::Value::Object(gen_config),
-        );
-    }
-
-    if !additional_params.is_empty() {
-        builder = builder.additional_params(serde_json::Value::Object(additional_params));
-    }
-
-    let temp = temperature_override.or(config.temperature);
-    if let Some(t) = temp {
-        builder = builder.temperature(t);
-    }
-
-    let agent = builder.build();
-
-    tracing::info!(
-        model = %model,
-        table = %table_name,
-        "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
-    );
-
-    let raw_response = agent.prompt(prompt).await?;
     let parsed_records = parse_json_response(&raw_response)?;
 
     tracing::info!(
+        provider = %provider,
         count = parsed_records.len(),
         table = %table_name,
         "PopulateTable-Agent: successfully extracted structured records"
@@ -123,7 +198,9 @@ pub async fn extract_table_data(
 
 /// Helper function to parse raw LLM response text into a Vec of JSON objects,
 /// handling markdown fences, whitespace, and root object wrappers.
-pub fn parse_json_response(raw: &str) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+pub fn parse_json_response(
+    raw: &str,
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let mut cleaned = raw.trim();
 
     // Remove markdown code fences if present
@@ -147,16 +224,20 @@ pub fn parse_json_response(raw: &str) -> Result<Vec<serde_json::Value>, Box<dyn 
             if let (Some(start), Some(end)) = (cleaned.find('['), cleaned.rfind(']')) {
                 if start < end {
                     let slice = &cleaned[start..=end];
-                    serde_json::from_str(slice)
-                        .map_err(|e2| format!("Failed to parse JSON array from slice: {e2} (original error: {e})"))?
+                    serde_json::from_str(slice).map_err(|e2| {
+                        format!("Failed to parse JSON array from slice: {e2} (original error: {e})")
+                    })?
                 } else {
                     return Err(format!("Failed to parse JSON: {e} | Raw text: {raw}").into());
                 }
             } else if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
                 if start < end {
                     let slice = &cleaned[start..=end];
-                    serde_json::from_str(slice)
-                        .map_err(|e2| format!("Failed to parse JSON object from slice: {e2} (original error: {e})"))?
+                    serde_json::from_str(slice).map_err(|e2| {
+                        format!(
+                            "Failed to parse JSON object from slice: {e2} (original error: {e})"
+                        )
+                    })?
                 } else {
                     return Err(format!("Failed to parse JSON: {e} | Raw text: {raw}").into());
                 }
@@ -232,7 +313,11 @@ pub fn parse_field_info(raw: &str) -> (String, String, Option<String>) {
     let name = if let Some(idx) = raw.find('(') {
         raw[..idx].trim().to_string()
     } else {
-        raw.split_whitespace().next().unwrap_or(raw).trim().to_string()
+        raw.split_whitespace()
+            .next()
+            .unwrap_or(raw)
+            .trim()
+            .to_string()
     };
 
     let mut type_str = "string".to_string();
@@ -245,7 +330,14 @@ pub fn parse_field_info(raw: &str) -> (String, String, Option<String>) {
             let after_type = if let Some(def_idx) = rest.find(" DEFAULT ") {
                 let (t, rem) = rest.split_at(def_idx);
                 let def_str = rem.trim_start_matches(" DEFAULT ");
-                default_val = Some(def_str.split(" PERMISSIONS").next().unwrap_or(def_str).trim().to_string());
+                default_val = Some(
+                    def_str
+                        .split(" PERMISSIONS")
+                        .next()
+                        .unwrap_or(def_str)
+                        .trim()
+                        .to_string(),
+                );
                 t.trim()
             } else if let Some(perm_idx) = rest.find(" PERMISSIONS") {
                 rest[..perm_idx].trim()
@@ -262,9 +354,15 @@ pub fn parse_field_info(raw: &str) -> (String, String, Option<String>) {
 fn semantic_hint_for_field(name: &str, type_str: &str) -> &'static str {
     match name {
         "url" | "link" => "Canonical URL link to the primary reporting news source or document",
-        "discovery_query" | "query" => "The exact boolean search query string used to discover this source document",
-        "raw_text" | "content" => "Article headline/title and factual excerpt or quote describing the specific crime incident",
-        "incident_date" | "crime_date" | "date" => "Date when the incident/crime occurred in ISO-8601 YYYY-MM-DD format",
+        "discovery_query" | "query" => {
+            "The exact boolean search query string used to discover this source document"
+        }
+        "raw_text" | "content" => {
+            "Article headline/title and factual excerpt or quote describing the specific crime incident"
+        }
+        "incident_date" | "crime_date" | "date" => {
+            "Date when the incident/crime occurred in ISO-8601 YYYY-MM-DD format"
+        }
         "status" => "Initial processing lifecycle status; defaults to 'Pending'",
         "crime_id" => "Optional record pointer to parent crime record (omit or null if unlinked)",
         "fetched_at" => "Timestamp when retrieved (defaults to current time if omitted)",
@@ -282,9 +380,13 @@ fn semantic_hint_for_field(name: &str, type_str: &str) -> &'static str {
 
 fn example_value_for_field(name: &str, type_str: &str) -> Option<serde_json::Value> {
     match name {
-        "url" => Some(serde_json::json!("https://www.example-news.de/incident-report.html")),
+        "url" => Some(serde_json::json!(
+            "https://www.example-news.de/incident-report.html"
+        )),
         "discovery_query" => Some(serde_json::json!("\"Berlin\" homicide site:spiegel.de")),
-        "raw_text" => Some(serde_json::json!("Headline: Factual summary and quotation describing the criminal incident...")),
+        "raw_text" => Some(serde_json::json!(
+            "Headline: Factual summary and quotation describing the criminal incident..."
+        )),
         "incident_date" => Some(serde_json::json!("2000-02-15")),
         "status" => Some(serde_json::json!("Pending")),
         "crime_id" => None,

@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ModelProvider};
 use rig::prelude::*;
-use rig::providers::gemini;
+use rig::providers::{gemini, openai};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -37,7 +37,9 @@ pub struct Homecides {
     pub Other_sentence: String,
 }
 
-fn deserialize_prison_duration<'de, D>(deserializer: D) -> Result<surrealdb_types::Duration, D::Error>
+fn deserialize_prison_duration<'de, D>(
+    deserializer: D,
+) -> Result<surrealdb_types::Duration, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -88,7 +90,9 @@ where
         where
             M: serde::de::MapAccess<'de>,
         {
-            let std_dur = std::time::Duration::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+            let std_dur = std::time::Duration::deserialize(
+                serde::de::value::MapAccessDeserializer::new(map),
+            )?;
             Ok(surrealdb_types::Duration::from_std(std_dur))
         }
     }
@@ -119,30 +123,64 @@ pub async fn run(config: &AppConfig) -> Result<Vec<Homecides>, Box<dyn std::erro
     println!("Database Schema Info (INFO FOR DB):");
     println!("{}\n", serde_json::to_string_pretty(&schema_info)?);
 
-    // 2. Request structured data from Gemini with Google Search Grounding
-    let client = gemini::Client::new(&config.gemini_api_key)?;
-
-    let mut builder = client.agent(&config.model);
-
+    // 2. Request structured data from Gemini / Qwen with Search Grounding
     let system_instructions = match &config.preamble {
         Some(p) => format!("{p}\n\nSearch guidelines: Search online for all reported homicides, fatal stabbings, shootings, and manslaughter cases in Berlin during January 2026. For each case, return citiy ('Berlin'), Citizenship of suspect/perpetrator if reported (otherwise 'Unknown'), Date (ISO-8601 format e.g. '2026-01-15T00:00:00Z'), weapon used, Prison_time (use '0s' if trial/sentencing is pending), and Other_sentence (e.g. 'Under investigation', 'Arrested', 'Suspect at large', or trial details)."),
         None => "You are an investigative researcher. Search online for all reported homicides, fatal stabbings, shootings, and manslaughter cases in Berlin during January 2026. For each case, return citiy ('Berlin'), Citizenship of suspect/perpetrator if reported (otherwise 'Unknown'), Date (ISO-8601 format e.g. '2026-01-15T00:00:00Z'), weapon used, Prison_time (use '0s' if trial/sentencing is pending), and Other_sentence (e.g. 'Under investigation', 'Arrested', 'Suspect at large', or trial details).".to_string(),
     };
 
-    builder = builder
-        .preamble(&system_instructions)
-        .additional_params(grounding_config);
+    let response: Vec<Homecides> = match config.provider {
+        ModelProvider::Gemini => {
+            let client = gemini::Client::new(&config.gemini_api_key)?;
+            let mut builder = client.agent(&config.model);
+            builder = builder
+                .preamble(&system_instructions)
+                .additional_params(grounding_config);
 
-    if let Some(temperature) = config.temperature {
-        builder = builder.temperature(temperature);
-    }
+            if let Some(temperature) = config.temperature {
+                builder = builder.temperature(temperature);
+            }
 
-    let agent = builder.build();
+            let agent = builder.build();
 
-    println!("Model: {}", config.model);
-    println!("Requesting structured data from Gemini...");
+            println!("Provider: gemini | Model: {}", config.model);
+            println!("Requesting structured data from Gemini...");
 
-    let response: Vec<Homecides> = agent.prompt_typed(&config.prompt_typed.query).await?;
+            agent.prompt_typed(&config.prompt_typed.query).await?
+        }
+        ModelProvider::Qwen => {
+            let model = if config.model.contains("gemini") {
+                &config.qwen_model
+            } else {
+                &config.model
+            };
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(&config.qwen_api_key)
+                .base_url(&config.qwen_base_url)
+                .build()?;
+            let mut builder = client.agent(model);
+            builder = builder
+                .preamble(&system_instructions)
+                .additional_params(json!({
+                    "enable_search": true
+                }));
+
+            if let Some(temperature) = config.temperature {
+                builder = builder.temperature(temperature);
+            }
+
+            let agent = builder.build();
+
+            println!(
+                "Provider: qwen | Model: {} (base_url: {})",
+                model, config.qwen_base_url
+            );
+            println!("Requesting structured data from Qwen...");
+
+            agent.prompt_typed(&config.prompt_typed.query).await?
+        }
+    };
 
     println!(
         "\nTyped Agent Response ({} records received):",

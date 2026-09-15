@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod client;
 pub mod extractor;
 pub mod intervals;
@@ -7,7 +8,11 @@ pub mod pb {
     tonic::include_proto!("table_populator");
 }
 
-pub use client::{connect_client, AgentGrpcClient};
+pub use auth::{
+    check_oauth_at_startup, create_auth_layer, discover_oidc_endpoints, AuthIdentity,
+    AuthValidator, GrpcAuthInterceptor, OAuthCheckReport, OidcDiscoveryDocument,
+};
+pub use client::{connect_client, connect_client_with_auth, AgentGrpcClient, ClientAuth};
 pub use extractor::{extract_table_data, parse_json_response};
 pub use intervals::{
     generate_interval_steps, inject_timeframe_into_prompt, parse_interval, DateIntervalStep,
@@ -42,11 +47,29 @@ pub async fn start_grpc_server(
     println!("Starting Tonic gRPC TablePopulator server on {addr}...");
     tracing::info!(host = %config.grpc.host, port = %config.grpc.port, "Tonic gRPC server listening");
 
-    Server::builder()
-        .add_service(reflection)
-        .add_service(svc)
-        .serve(addr)
-        .await?;
+    if config.grpc.auth.is_active() {
+        println!("gRPC Authentication: ACTIVE");
+        if config.grpc.auth.admin_password.is_some() {
+            println!(" - Basic Auth: ENABLED (admin user: '{}')", config.grpc.auth.admin_user);
+        }
+        if config.grpc.auth.oauth.is_configured() {
+            println!(" - OAuth 2.0 Bearer: ENABLED");
+        }
+        let auth_layer = create_auth_layer(&config.grpc.auth)?;
+        Server::builder()
+            .layer(auth_layer)
+            .add_service(reflection)
+            .add_service(svc)
+            .serve(addr)
+            .await?;
+    } else {
+        println!("gRPC Authentication: DISABLED (public access)");
+        Server::builder()
+            .add_service(reflection)
+            .add_service(svc)
+            .serve(addr)
+            .await?;
+    }
 
     Ok(())
 }

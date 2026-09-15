@@ -163,11 +163,13 @@ impl TablePopulatorServiceImpl {
         db: &AppDb,
         model_fields: &[String],
         target_field_names: &[String],
+        provider: Option<&str>,
         model: Option<&str>,
         temperature: Option<f64>,
         preamble: Option<&str>,
         enable_grounding: bool,
         thinking_level: Option<&str>,
+        base_url: Option<&str>,
     ) -> IntervalIterationResult {
         let prompt = inject_timeframe_into_prompt(template_prompt, &step.timeframe_label);
         tracing::info!(
@@ -181,11 +183,13 @@ impl TablePopulatorServiceImpl {
             &prompt,
             table_name,
             model_fields,
+            provider,
             model,
             temperature,
             preamble,
             enable_grounding,
             thinking_level,
+            base_url,
         )
         .await
         {
@@ -261,8 +265,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let table_name = req.table_name.trim().to_string();
 
         let effective_model = req.model.as_deref().unwrap_or(&self.config.model);
+        let effective_provider = req.provider.as_deref().unwrap_or(match self.config.provider {
+            crate::config::ModelProvider::Gemini => "gemini",
+            crate::config::ModelProvider::Qwen => "qwen",
+        });
         tracing::info!(
             table = %table_name,
+            provider = %effective_provider,
             model = %effective_model,
             namespace = ?req.namespace,
             database = ?req.database,
@@ -355,10 +364,11 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 .collect()
         };
 
-        // 4. Extract structured data using Rig / Gemini
+        // 4. Extract structured data using Rig / Gemini / Qwen
         let enable_grounding = req.enable_grounding.unwrap_or(true);
         tracing::info!(
             table = %table_name,
+            provider = %effective_provider,
             model = %effective_model,
             "PopulateTable-Agent starting data extraction"
         );
@@ -367,11 +377,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             &prompt,
             &table_name,
             &model_fields,
+            req.provider.as_deref(),
             req.model.as_deref(),
             req.temperature,
             req.preamble.as_deref(),
             enable_grounding,
             req.thinking_level.as_deref(),
+            req.base_url.as_deref(),
         )
         .await
         {
@@ -607,11 +619,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                     &db,
                     &model_fields,
                     &target_field_names,
+                    req.provider.as_deref(),
                     req.model.as_deref(),
                     req.temperature,
                     req.preamble.as_deref(),
                     enable_grounding,
                     thinking_level,
+                    req.base_url.as_deref(),
                 )
                 .await;
 
@@ -686,11 +700,13 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                         &db,
                         &model_fields,
                         &target_field_names,
+                        req.provider.as_deref(),
                         req.model.as_deref(),
                         req.temperature,
                         req.preamble.as_deref(),
                         enable_grounding,
                         thinking_level,
+                        req.base_url.as_deref(),
                     )
                     .await;
 

@@ -1,8 +1,30 @@
-# Gemini API Key (can also be set via GEMINI_API_KEY environment variable)
+# Default LLM Provider: "gemini" or "qwen" (can also be set via PROVIDER environment variable)
+provider = "gemini"
+
+# Gemini API Key (can also be set via GEMINI_API_KEY environment variable or OpenBao)
 gemini_api_key = "YOUR_GEMINI_API_KEY_HERE"
 
-# Model selection (e.g. gemini-3.7-flash, gemini-3.5-flash-lite, etc.)
+# Qwen API Key (can also be set via QWEN_API_KEY or DASHSCOPE_API_KEY environment variable or OpenBao)
+qwen_api_key = "YOUR_QWEN_API_KEY_HERE"
+
+# Qwen DashScope OpenAI-compatible API base URL (can change depending on region or plan):
+# - International endpoint: https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (default)
+# - Mainland China endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
+# - Coding plan endpoint: https://coding.dashscope.aliyuncs.com/v1
+# Can also be set via QWEN_BASE_URL, DASHSCOPE_BASE_URL, QWEN_URL, or OpenBao.
+qwen_base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+# Gemini Model selection (e.g. gemini-3.7-flash, gemini-3.5-flash-lite, etc.)
 model = "gemini-3.7-flash"
+
+# Qwen Model selection (e.g. qwen-plus, qwen-max, qwen-turbo, qwen2.5-72b-instruct)
+qwen_model = "qwen-plus"
+
+# Alternatively, configure Qwen settings in a dedicated [qwen] table:
+# [qwen]
+# base_url = "https://coding.dashscope.aliyuncs.com/v1"
+# model = "qwen-plus"
+# api_key = "YOUR_QWEN_API_KEY_HERE"
 
 # Model temperature (0.0 to 2.0)
 temperature = 0.0
@@ -34,3 +56,68 @@ database = "ai"
 [grpc]
 host = "127.0.0.1"
 port = 50051
+
+# gRPC Endpoint Authentication (OAuth 2.0 & Admin Basic Auth)
+# If enabled = false, unauthenticated calls are allowed.
+# If omitted, authentication is activated automatically whenever admin_password or oauth is configured.
+[grpc.auth]
+# enabled = true
+
+# Basic Auth settings for admin
+admin_user = "admin"
+# The admin password can be configured here or passed via ADMIN_PASSWORD / GRPC_ADMIN_PASSWORD env var:
+# admin_password = "YOUR_ADMIN_PASSWORD_HERE"
+
+# OAuth 2.0 Bearer token settings
+[grpc.auth.oauth]
+# OpenID Connect Discovery URL (auto-discovers issuer, jwks_url, and token_url)
+# well_known_url = "https://auth.example.com/.well-known/openid-configuration"
+# JWKS URL from OIDC / OAuth2 Provider (e.g. Keycloak, FerrisKey, Auth0, Google)
+# jwks_url = "https://auth.example.com/.well-known/jwks.json"
+# Expected token issuer (optional validation; auto-discovered from well_known_url)
+# issuer = "https://auth.example.com"
+# Expected token audience (optional validation)
+# audience = "ai-grpc-service"
+# Client credentials for startup check and client authentication
+# client_id = "ai_agent"
+# client_secret = "YOUR_CLIENT_SECRET" # Can also be resolved from OpenBao
+# token_url = "https://auth.example.com/oauth/token" # Auto-discovered if well_known_url is set
+# Whether to run health & authentication check for OAuth at server startup (default: true when OAuth is configured)
+# check_on_startup = true
+# Shared HMAC secret for symmetric HS256 JWTs (alternative to JWKS)
+# jwt_secret = "YOUR_SHARED_HMAC_SECRET"
+# PEM-formatted RSA/EC public key for asymmetric tokens (alternative to JWKS)
+# jwt_public_key = "-----BEGIN PUBLIC KEY-----\n..."
+# Optional list of static Bearer tokens for development/testing
+# static_tokens = ["dev_secret_token_123"]
+
+# OpenBao / HashiCorp Vault configuration for secret resolution
+[vault]
+# Set to true to fetch and overwrite secrets from OpenBao/Vault at startup
+# Note: If enabled and connection is not possible or secrets are missing, startup will fail.
+enabled = false
+address = "http://127.0.0.1:8200"
+# token = "YOUR_VAULT_TOKEN" # Can also be set via VAULT_TOKEN / OPENBAO_TOKEN env var
+mount = "secret"
+path = "ai"
+kv_version = 2
+# Set to true to automatically renew the OpenBao token in the background before lease expiration
+# auto_renew = true
+# Optional custom lease increment to request during renewal (e.g. "1h", "24h")
+# renew_increment = "1h"
+
+# Configurable mapping from OpenBao secret key names to application configuration fields.
+# Each entry can be either a single string or a list of fallback keys to search.
+[vault.keys]
+# gemini_api_key = ["gemini_api_key", "api_key"]
+# qwen_api_key = ["qwen_api_key", "dashscope_api_key", "qwen", "dashscope"]
+# qwen_base_url = ["qwen_base_url", "qwen_url", "dashscope_base_url", "dashscope_url"]
+# db_password = ["db_password", "password", "SURREAL_PASS"]
+# db_username = ["db_username", "username", "SURREAL_USER"]
+# db_endpoint = ["db_endpoint", "endpoint", "SURREAL_URL"]
+# db_namespace = ["db_namespace", "namespace", "SURREAL_NS"]
+# db_database = ["db_database", "database", "SURREAL_DB"]
+# grpc_admin_password = ["grpc_admin_password", "admin_password"]
+# grpc_oauth_client_id = ["oauth-clientname", "oauth_client_id", "client_id"]
+# grpc_oauth_secret = ["outh-secret", "oauth-secret", "AI_GRPC_OAUTH_SECRET"]
+

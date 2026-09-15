@@ -1,7 +1,7 @@
 use ai::config::AppConfig;
 use ai::grpc::{
-    connect_client, ExecuteSurrealQlRequest, GetTableInfoRequest, ListTablesRequest,
-    PopulateTableIntervalRequest, PopulateTableRequest,
+    connect_client_with_auth, ClientAuth, ExecuteSurrealQlRequest, GetTableInfoRequest,
+    ListTablesRequest, PopulateTableIntervalRequest, PopulateTableRequest,
 };
 use clap::Parser;
 
@@ -12,6 +12,18 @@ struct Cli {
     /// gRPC server address
     #[arg(short, long, default_value = "http://127.0.0.1:50051")]
     addr: String,
+
+    /// Admin password for Basic Auth (can also be set via ADMIN_PASSWORD env var)
+    #[arg(short = 'P', long = "password")]
+    password: Option<String>,
+
+    /// Admin username for Basic Auth (defaults to "admin", can also be set via ADMIN_USER env var)
+    #[arg(short = 'u', long = "user")]
+    user: Option<String>,
+
+    /// OAuth 2.0 Bearer token (can also be set via OAUTH_TOKEN or BEARER_TOKEN env var)
+    #[arg(short = 'T', long = "token")]
+    token: Option<String>,
 
     /// Target SurrealDB table name
     #[arg(short, long)]
@@ -41,7 +53,15 @@ struct Cli {
     #[arg(short = 'i', long)]
     info: Option<String>,
 
-    /// Optional Gemini model override
+    /// Optional LLM provider override: "gemini", "qwen"
+    #[arg(long = "provider")]
+    provider: Option<String>,
+
+    /// Optional provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan)
+    #[arg(long = "base-url")]
+    base_url: Option<String>,
+
+    /// Optional model override
     #[arg(short = 'm', long)]
     model: Option<String>,
 
@@ -74,20 +94,37 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-    let config = AppConfig::load().unwrap_or_else(|_| AppConfig {
-        gemini_api_key: "".to_string(),
-        model: "gemini-3.7-flash".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
-        db: Default::default(),
-        grpc: Default::default(),
-    });
+    let config = AppConfig::load().await.unwrap_or_default();
+
+    let auth = if let Some(token) = cli
+        .token
+        .or_else(|| std::env::var("OAUTH_TOKEN").ok())
+        .or_else(|| std::env::var("BEARER_TOKEN").ok())
+    {
+        Some(ClientAuth::Bearer(token))
+    } else if let Some(pass) = cli
+        .password
+        .or_else(|| config.grpc.auth.admin_password.clone())
+        .or_else(|| std::env::var("ADMIN_PASSWORD").ok())
+        .or_else(|| std::env::var("GRPC_ADMIN_PASSWORD").ok())
+    {
+        let user = cli
+            .user
+            .or_else(|| std::env::var("ADMIN_USER").ok())
+            .unwrap_or_else(|| config.grpc.auth.admin_user.clone());
+        Some(ClientAuth::Basic { user, pass })
+    } else {
+        None
+    };
 
     println!("Connecting to gRPC server at {}...", cli.addr);
-    let mut client = connect_client(&cli.addr).await?;
+    if let Some(ref a) = auth {
+        match a {
+            ClientAuth::Basic { user, .. } => println!("Using Basic Authentication (user: {user})"),
+            ClientAuth::Bearer(_) => println!("Using OAuth 2.0 Bearer Authentication"),
+        }
+    }
+    let mut client = connect_client_with_auth(&cli.addr, auth).await?;
     println!("Connected successfully.\n");
 
     if cli.list_tables {
@@ -145,7 +182,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .prompt
         .unwrap_or_else(|| config.prompt_typed.query.clone());
 
-    let model = cli.model.as_deref().unwrap_or(&config.model);
+    let effective_provider = cli.provider.as_deref().unwrap_or(match config.provider {
+        ai::config::ModelProvider::Gemini => "gemini",
+        ai::config::ModelProvider::Qwen => "qwen",
+    });
+
+    let model = cli.model.as_deref().unwrap_or(match effective_provider {
+        "qwen" => {
+            if config.model.contains("gemini") {
+                &config.qwen_model
+            } else {
+                &config.model
+            }
+        }
+        _ => &config.model,
+    });
 
     let target_ns = cli.namespace.as_deref().unwrap_or(&config.db.namespace);
     let target_db = cli.database.as_deref().unwrap_or(&config.db.database);
@@ -158,9 +209,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Target Namespace: {}", target_ns);
         println!("Target Database: {}", target_db);
         println!("Target Table: {}", table);
+        println!("Provider: {}", effective_provider);
+        println!("Model: {}", model);
+        if let Some(ref bu) = cli.base_url {
+            println!("Base URL: {}", bu);
+        }
         println!("Interval: {}", interval);
         println!("Date Range: {} to {}", start_date, end_date);
-        println!("Model: {}", model);
         if !cli.omit_fields.is_empty() {
             println!("Omit Fields: {:?}", cli.omit_fields);
         }
@@ -184,6 +239,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 enable_grounding: Some(true),
                 omit_fields: cli.omit_fields.clone(),
                 thinking_level: cli.thinking_level.clone(),
+                provider: cli.provider,
+                base_url: cli.base_url.clone(),
             })
             .await?
             .into_inner();
@@ -216,7 +273,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Target Namespace: {}", target_ns);
     println!("Target Database: {}", target_db);
     println!("Target Table: {}", table);
+    println!("Provider: {}", effective_provider);
     println!("Model: {}", model);
+    if let Some(ref bu) = cli.base_url {
+        println!("Base URL: {}", bu);
+    }
     if !cli.omit_fields.is_empty() {
         println!("Omit Fields: {:?}", cli.omit_fields);
     }
@@ -240,6 +301,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             enable_grounding: Some(true),
             omit_fields: cli.omit_fields,
             thinking_level: cli.thinking_level,
+            provider: cli.provider,
+            base_url: cli.base_url,
         })
         .await?
         .into_inner();

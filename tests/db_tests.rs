@@ -73,8 +73,9 @@ async fn test_app_config_db_loading() {
         if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("APP_GEMINI_API_KEY").is_err() {
             std::env::set_var("GEMINI_API_KEY", "test_key");
         }
+        std::env::set_var("VAULT_ENABLED", "false");
     }
-    let config = AppConfig::load().expect("Failed to load AppConfig");
+    let config = AppConfig::load().await.expect("Failed to load AppConfig");
     assert_eq!(config.db.namespace, "data");
     assert_eq!(config.db.database, "ai");
 
@@ -97,6 +98,10 @@ async fn test_app_config_db_loading() {
     let records = get_all_gdp_records(&db).await.unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].year, "2024");
+
+    unsafe {
+        std::env::remove_var("VAULT_ENABLED");
+    }
 }
 
 #[tokio::test]
@@ -340,9 +345,10 @@ async fn test_env_var_credential_overrides() {
         std::env::set_var("SURREAL_NS", "data");
         std::env::set_var("SURREAL_DB", "ai");
         std::env::set_var("GEMINI_API_KEY", "test_env_gemini_key");
+        std::env::set_var("VAULT_ENABLED", "false");
     }
 
-    let config = AppConfig::load().expect("Failed to load config with env vars");
+    let config = AppConfig::load().await.expect("Failed to load config with env vars");
     assert_eq!(config.gemini_api_key, "test_env_gemini_key");
     assert_eq!(config.db.password.as_deref(), Some("test_env_password_123"));
     assert_eq!(config.db.username.as_deref(), Some("test_env_user"));
@@ -357,6 +363,7 @@ async fn test_env_var_credential_overrides() {
         std::env::remove_var("SURREAL_NS");
         std::env::remove_var("SURREAL_DB");
         std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("VAULT_ENABLED");
     }
 }
 
@@ -383,15 +390,17 @@ async fn test_app_surrealdb_env_vars() {
         std::env::set_var("APP_SURREALDB_PASS", "app_pass_test");
         std::env::set_var("APP_SURREALDB_USER", "app_user_test");
         std::env::set_var("GEMINI_API_KEY", "test_key");
+        std::env::set_var("VAULT_ENABLED", "false");
     }
 
-    let config = AppConfig::load().expect("Failed to load config with APP_SURREALDB env vars");
+    let config = AppConfig::load().await.expect("Failed to load config with APP_SURREALDB env vars");
     assert_eq!(config.db.password.as_deref(), Some("app_pass_test"));
     assert_eq!(config.db.username.as_deref(), Some("app_user_test"));
 
     unsafe {
         std::env::remove_var("APP_SURREALDB_PASS");
         std::env::remove_var("APP_SURREALDB_USER");
+        std::env::remove_var("VAULT_ENABLED");
     }
 }
 
@@ -443,3 +452,106 @@ fn test_coerce_surrealql_literals() {
         r#"[{"fetched_at":<datetime>'2026-09-06T14:08:00Z',"incident_date":<datetime>'2000-02-20',"url":"https://example.com"}]"#
     );
 }
+
+#[tokio::test]
+async fn test_vault_env_overrides() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::set_var("GEMINI_API_KEY", "test_key");
+        std::env::set_var("VAULT_ENABLED", "false");
+        std::env::set_var("VAULT_ADDR", "http://openbao.local:8200");
+        std::env::set_var("VAULT_TOKEN", "token_env_123");
+        std::env::set_var("VAULT_MOUNT", "secret_mount");
+        std::env::set_var("VAULT_PATH", "ai_app");
+        std::env::set_var("VAULT_NAMESPACE", "custom_ns");
+        std::env::set_var("VAULT_KV_VERSION", "2");
+    }
+
+    let config = AppConfig::load_from_config().expect("load_from_config should succeed");
+    assert!(!config.vault.enabled);
+    assert_eq!(config.vault.address, "http://openbao.local:8200");
+    assert_eq!(config.vault.token.as_deref(), Some("token_env_123"));
+    assert_eq!(config.vault.mount, "secret_mount");
+    assert_eq!(config.vault.path, "ai_app");
+    assert_eq!(config.vault.namespace.as_deref(), Some("custom_ns"));
+    assert_eq!(config.vault.kv_version, 2);
+
+    unsafe {
+        std::env::remove_var("VAULT_ADDR");
+        std::env::remove_var("VAULT_TOKEN");
+        std::env::remove_var("VAULT_MOUNT");
+        std::env::remove_var("VAULT_PATH");
+        std::env::remove_var("VAULT_NAMESPACE");
+        std::env::remove_var("VAULT_KV_VERSION");
+    }
+}
+
+#[tokio::test]
+async fn test_vault_auto_renew_env_overrides() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::set_var("GEMINI_API_KEY", "test_key");
+        std::env::set_var("VAULT_ENABLED", "false");
+        std::env::set_var("VAULT_AUTO_RENEW", "false");
+        std::env::set_var("VAULT_RENEW_INCREMENT", "2h");
+    }
+
+    let config = AppConfig::load_from_config().expect("load_from_config should succeed");
+    assert!(!config.vault.auto_renew);
+    assert_eq!(config.vault.renew_increment.as_deref(), Some("2h"));
+
+    unsafe {
+        std::env::remove_var("VAULT_AUTO_RENEW");
+        std::env::remove_var("VAULT_RENEW_INCREMENT");
+    }
+}
+
+#[tokio::test]
+async fn test_vault_enabled_strict_abort_when_unreachable() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::set_var("GEMINI_API_KEY", "test_key");
+        std::env::set_var("VAULT_ENABLED", "true");
+        std::env::set_var("VAULT_ADDR", "http://127.0.0.1:59998");
+        std::env::set_var("VAULT_TOKEN", "dummy_test_token");
+        std::env::set_var("VAULT_PATH", "nonexistent_secret");
+    }
+
+    let result = AppConfig::load().await;
+    assert!(result.is_err(), "AppConfig::load() must return Err when Vault is enabled and unreachable");
+
+    unsafe {
+        std::env::remove_var("VAULT_ENABLED");
+        std::env::remove_var("VAULT_ADDR");
+        std::env::remove_var("VAULT_TOKEN");
+        std::env::remove_var("VAULT_PATH");
+    }
+}
+
+#[tokio::test]
+async fn test_vault_token_renewer_disabled_returns_none() {
+    let config = ai::vault::VaultConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let renewer = config.start_token_renewer().unwrap();
+    assert!(renewer.is_none());
+}
+
+#[tokio::test]
+async fn test_vault_token_renewer_spawns_and_cancels() {
+    let config = ai::vault::VaultConfig {
+        enabled: true,
+        auto_renew: true,
+        address: "http://127.0.0.1:59997".to_string(), // Unreachable mock
+        token: Some("dummy_test_token".to_string()),
+        ..Default::default()
+    };
+
+    let mut renewer = config.start_token_renewer().unwrap().expect("Should return Some(RenewerHandle)");
+    assert!(!renewer.is_finished());
+    renewer.stop();
+    let res = renewer.wait_for_completion().await;
+    assert!(res.is_ok());
+}
+

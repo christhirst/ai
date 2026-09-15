@@ -1,4 +1,5 @@
 {
+  "provider": "gemini",
   "prompt": "### Target Task:\n- Location: \"Germany\"\n- Timeframe: \"2000-04\"\n- Target Offence Scope: \"Homicides, Aggravated Assaults, Major Crimes\"\n\nDiscover primary reporting links and incident source documents for this window. Return the verified leads using the required JSON schema.",
   "table_name": "incident_source",
   "namespace": "data",

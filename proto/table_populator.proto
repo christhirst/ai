@@ -49,6 +49,10 @@ message PopulateTableRequest {
   repeated string omit_fields = 10;
   // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
   optional string thinking_level = 11;
+  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  optional string provider = 12;
+  // Optional LLM provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan: "https://coding.dashscope.aliyuncs.com/v1")
+  optional string base_url = 13;
 }
 
 message PopulateTableResponse {
@@ -127,6 +131,10 @@ message PopulateTableIntervalRequest {
   repeated string omit_fields = 13;
   // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
   optional string thinking_level = 14;
+  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  optional string provider = 15;
+  // Optional LLM provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan: "https://coding.dashscope.aliyuncs.com/v1")
+  optional string base_url = 16;
 }
 
 message IntervalIterationResult {

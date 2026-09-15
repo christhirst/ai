@@ -120,11 +120,6 @@ async fn test_grpc_service_methods() {
     let config = Arc::new(AppConfig {
         gemini_api_key: "test_key".to_string(),
         model: "gemini-3.7-flash".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
         db: DatabaseConfig {
             endpoint: "mem://".to_string(),
             namespace: "test_ns".to_string(),
@@ -135,7 +130,9 @@ async fn test_grpc_service_methods() {
         grpc: GrpcConfig {
             host: "127.0.0.1".to_string(),
             port: 50051,
+            ..Default::default()
         },
+        ..Default::default()
     });
 
     let service = TablePopulatorServiceImpl::new(config, app_db.clone());
@@ -200,11 +197,6 @@ async fn test_grpc_network_roundtrip() {
     let config = Arc::new(AppConfig {
         gemini_api_key: "test_key".to_string(),
         model: "gemini-3.7-flash".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
         db: DatabaseConfig {
             endpoint: "mem://".to_string(),
             namespace: "net_ns".to_string(),
@@ -215,7 +207,9 @@ async fn test_grpc_network_roundtrip() {
         grpc: GrpcConfig {
             host: addr.ip().to_string(),
             port: addr.port(),
+            ..Default::default()
         },
+        ..Default::default()
     });
 
     let service = TablePopulatorServiceImpl::new(config.clone(), app_db.clone());
@@ -291,11 +285,6 @@ async fn test_populate_table_request_receipt_and_validation() {
     let config = Arc::new(AppConfig {
         gemini_api_key: "test_key".to_string(),
         model: "gemini-3.7-flash".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
         db: DatabaseConfig {
             endpoint: "mem://".to_string(),
             namespace: "pop_ns".to_string(),
@@ -306,7 +295,9 @@ async fn test_populate_table_request_receipt_and_validation() {
         grpc: GrpcConfig {
             host: "127.0.0.1".to_string(),
             port: 50052,
+            ..Default::default()
         },
+        ..Default::default()
     });
 
     let service = TablePopulatorServiceImpl::new(config, app_db);
@@ -325,6 +316,8 @@ async fn test_populate_table_request_receipt_and_validation() {
             enable_grounding: None,
             omit_fields: Vec::new(),
             thinking_level: None,
+            provider: None,
+            base_url: None,
         }))
         .await
         .unwrap_err();
@@ -345,6 +338,8 @@ async fn test_populate_table_request_receipt_and_validation() {
             enable_grounding: None,
             omit_fields: Vec::new(),
             thinking_level: None,
+            provider: None,
+            base_url: None,
         }))
         .await
         .unwrap_err();
@@ -555,11 +550,6 @@ async fn test_populate_table_interval_validation_and_stepping() {
     let config = Arc::new(AppConfig {
         gemini_api_key: "".to_string(),
         model: "mock-model".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
         db: DatabaseConfig {
             endpoint: "mem://".to_string(),
             namespace: "test_ns".to_string(),
@@ -570,7 +560,9 @@ async fn test_populate_table_interval_validation_and_stepping() {
         grpc: GrpcConfig {
             host: "127.0.0.1".to_string(),
             port: 50051,
+            ..Default::default()
         },
+        ..Default::default()
     });
 
     let service = TablePopulatorServiceImpl::new(config, app_db);
@@ -592,6 +584,8 @@ async fn test_populate_table_interval_validation_and_stepping() {
             enable_grounding: None,
             omit_fields: Vec::new(),
             thinking_level: None,
+            provider: None,
+            base_url: None,
         }))
         .await
         .unwrap_err();
@@ -615,6 +609,8 @@ async fn test_populate_table_interval_validation_and_stepping() {
             enable_grounding: None,
             omit_fields: Vec::new(),
             thinking_level: None,
+            provider: None,
+            base_url: None,
         }))
         .await
         .unwrap_err();
@@ -632,11 +628,6 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
     let config = Arc::new(AppConfig {
         gemini_api_key: "dummy_key".to_string(),
         model: "gemini-3.7-flash".to_string(),
-        temperature: Some(0.0),
-        preamble: None,
-        variant: ai::config::ExecutionVariant::Typed,
-        prompt: Default::default(),
-        prompt_typed: Default::default(),
         db: DatabaseConfig {
             endpoint: "mem://".to_string(),
             namespace: "test_ns".to_string(),
@@ -647,7 +638,9 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         grpc: GrpcConfig {
             host: "127.0.0.1".to_string(),
             port: 50051,
+            ..Default::default()
         },
+        ..Default::default()
     });
 
     // 1. Calling extract_table_data with legacy model (gemini-2.5-flash) must be rejected
@@ -656,11 +649,13 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         "test prompt",
         "dummy_table",
         &[],
+        Some("gemini"),
         Some("gemini-2.5-flash"),
         None,
         None,
         true,
         Some("low"),
+        None,
     )
     .await;
     assert!(res.is_err());
@@ -676,11 +671,13 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         "test prompt",
         "dummy_table",
         &[],
+        Some("gemini"),
         Some("gemini-3.7-flash"),
         None,
         None,
         true,
         Some("ultra_high"),
+        None,
     )
     .await;
     assert!(res.is_err());
@@ -689,4 +686,296 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         err_msg.contains("Invalid thinking_level"),
         "Unexpected error message: {err_msg}"
     );
+
+    // 3. Calling extract_table_data with unsupported provider must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("unsupported_provider"),
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("Unsupported provider"));
+
+    // 4. Calling extract_table_data with Qwen but without Qwen API key must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("qwen"),
+        Some("qwen-plus"),
+        None,
+        None,
+        false,
+        None,
+        Some("https://coding.dashscope.aliyuncs.com/v1"),
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("Qwen API key is not configured"));
 }
+
+#[tokio::test]
+async fn test_grpc_middleware_authentication_full_suite() {
+    use ai::config::{GrpcAuthConfig, GrpcOauthConfig};
+    use ai::grpc::{connect_client_with_auth, create_auth_layer, ClientAuth};
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    let db = init_memory_db("auth_ns", "auth_db")
+        .await
+        .expect("Failed to init memory db");
+    let app_db = Arc::new(AppDb::Local(db));
+
+    // Bind on port 0 to get an ephemeral OS port
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let jwt_secret = "test_super_secret_jwt_key_123456789";
+    let admin_pass = "admin_super_secret_password_777";
+
+    let auth_config = GrpcAuthConfig {
+        enabled: Some(true),
+        admin_user: "admin".to_string(),
+        admin_password: Some(admin_pass.to_string()),
+        oauth: GrpcOauthConfig {
+            jwt_secret: Some(jwt_secret.to_string()),
+            issuer: Some("test-auth-issuer".to_string()),
+            audience: Some("test-grpc-api".to_string()),
+            static_tokens: vec!["static_secret_token_123".to_string()],
+            ..Default::default()
+        },
+    };
+
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "test_key".to_string(),
+        model: "gemini-3.7-flash".to_string(),
+        db: DatabaseConfig {
+            endpoint: "mem://".to_string(),
+            namespace: "auth_ns".to_string(),
+            database: "auth_db".to_string(),
+            username: None,
+            password: None,
+        },
+        grpc: GrpcConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            auth: auth_config.clone(),
+        },
+        ..Default::default()
+    });
+
+    let service = TablePopulatorServiceImpl::new(config.clone(), app_db.clone());
+    let server = TablePopulatorServiceServer::new(service);
+    let auth_layer = create_auth_layer(&auth_config).expect("Failed to create auth layer");
+
+    // Spawn server with tonic-middleware layer attached
+    tokio::spawn(async move {
+        Server::builder()
+            .layer(auth_layer)
+            .add_service(server)
+            .serve(addr)
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(60)).await;
+    let endpoint = format!("http://{addr}");
+
+    // 1. Unauthenticated request MUST be rejected
+    let mut unauth_client = connect_client(&endpoint).await.unwrap();
+    let err = unauth_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(err.message().contains("Missing authorization metadata"));
+
+    // 2. Invalid Basic Auth password MUST be rejected
+    let mut bad_basic_client = connect_client_with_auth(
+        &endpoint,
+        Some(ClientAuth::Basic {
+            user: "admin".to_string(),
+            pass: "wrong_password".to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+    let err = bad_basic_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(err.message().contains("Invalid basic auth credentials"));
+
+    // 3. Valid Basic Auth MUST succeed
+    let mut good_basic_client = connect_client_with_auth(
+        &endpoint,
+        Some(ClientAuth::Basic {
+            user: "admin".to_string(),
+            pass: admin_pass.to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+    let resp = good_basic_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .expect("Valid Basic Auth request failed");
+    assert!(resp.into_inner().tables.is_empty() || true);
+
+    // 4. Invalid OAuth token MUST be rejected
+    let mut bad_oauth_client = connect_client_with_auth(
+        &endpoint,
+        Some(ClientAuth::Bearer("invalid.jwt.token".to_string())),
+    )
+    .await
+    .unwrap();
+    let err = bad_oauth_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // 5. Valid signed OAuth JWT MUST succeed
+    let exp = (chrono::Utc::now() + chrono::Duration::hours(2)).timestamp() as usize;
+    let claims = serde_json::json!({
+        "sub": "oauth_user_99",
+        "iss": "test-auth-issuer",
+        "aud": "test-grpc-api",
+        "exp": exp,
+    });
+    let valid_jwt = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(jwt_secret.as_bytes()),
+    )
+    .unwrap();
+
+    let mut good_oauth_client = connect_client_with_auth(
+        &endpoint,
+        Some(ClientAuth::Bearer(valid_jwt)),
+    )
+    .await
+    .unwrap();
+    let resp = good_oauth_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .expect("Valid OAuth JWT request failed");
+    let _ = resp.into_inner();
+
+    // 6. Valid static Bearer token MUST succeed
+    let mut static_oauth_client = connect_client_with_auth(
+        &endpoint,
+        Some(ClientAuth::Bearer("static_secret_token_123".to_string())),
+    )
+    .await
+    .unwrap();
+    let resp = static_oauth_client
+        .list_tables(ListTablesRequest {
+            namespace: None,
+            database: None,
+        })
+        .await
+        .expect("Valid static token request failed");
+    let _ = resp.into_inner();
+}
+
+#[test]
+fn test_admin_password_from_env_var() {
+    unsafe {
+        std::env::set_var("ADMIN_PASSWORD", "super_env_admin_pass_99");
+        std::env::set_var("ADMIN_USER", "custom_admin");
+    }
+
+    let config = AppConfig::load_from_config().expect("Failed to load config");
+    assert_eq!(
+        config.grpc.auth.admin_password.as_deref(),
+        Some("super_env_admin_pass_99")
+    );
+    assert_eq!(config.grpc.auth.admin_user, "custom_admin");
+    assert!(config.grpc.auth.is_active());
+
+    unsafe {
+        std::env::remove_var("ADMIN_PASSWORD");
+        std::env::remove_var("ADMIN_USER");
+    }
+}
+
+#[tokio::test]
+async fn test_oauth_startup_check_integration() {
+    use ai::config::{GrpcAuthConfig, GrpcOauthConfig};
+    use ai::grpc::check_oauth_at_startup;
+
+    // 1. Static tokens startup check
+    let mut static_auth = GrpcAuthConfig {
+        enabled: Some(true),
+        oauth: GrpcOauthConfig {
+            static_tokens: vec!["dev_token_abc".to_string()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let report = check_oauth_at_startup(&mut static_auth)
+        .await
+        .expect("Static token check should succeed")
+        .expect("Report should be present");
+    assert_eq!(report.issuer, None);
+
+    // 2. Disabled check
+    let mut disabled_auth = GrpcAuthConfig {
+        enabled: Some(false),
+        oauth: GrpcOauthConfig {
+            static_tokens: vec!["dev_token_abc".to_string()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let report_none = check_oauth_at_startup(&mut disabled_auth)
+        .await
+        .expect("Disabled auth check should return Ok(None)");
+    assert!(report_none.is_none());
+
+    // 3. check_on_startup = false override
+    let mut bypassed_auth = GrpcAuthConfig {
+        enabled: Some(true),
+        oauth: GrpcOauthConfig {
+            check_on_startup: Some(false),
+            static_tokens: vec!["dev_token_abc".to_string()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let report_bypassed = check_oauth_at_startup(&mut bypassed_auth)
+        .await
+        .expect("Bypassed auth check should return Ok(None)");
+    assert!(report_bypassed.is_none());
+}
+

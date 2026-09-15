@@ -3,8 +3,12 @@ pub mod db;
 pub mod grpc;
 pub mod prompt;
 pub mod prompt_typed;
+pub mod vault;
 
-pub use config::{AppConfig, DatabaseConfig, ExecutionVariant, GrpcConfig, PromptConfig, PromptTypedConfig};
+pub use config::{
+    AppConfig, DatabaseConfig, ExecutionVariant, GrpcConfig, ModelProvider, PromptConfig,
+    PromptTypedConfig,
+};
 pub use db::{AppDb, LocalDb};
 pub use grpc::{
     connect_client, start_grpc_server, AgentGrpcClient, PopulateTableRequest, PopulateTableResponse,

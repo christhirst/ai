@@ -4,7 +4,8 @@ use ai::{prompt, prompt_typed};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    let config = AppConfig::load()?;
+    let config = AppConfig::load().await?;
+    let _vault_renewer = config.vault.start_token_renewer()?;
 
     println!("Configuration loaded successfully.");
     println!("Selected Variant: {}\n", config.variant);
