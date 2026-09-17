@@ -1,0 +1,74 @@
+# Default LLM Provider: "gemini" or "qwen"
+provider = "gemini"
+
+# Gemini API Key (can also be set via GEMINI_API_KEY environment variable)
+#gemini_api_key = "test"
+
+# Qwen DashScope OpenAI-compatible API base URL (configurable for standard vs coding plan):
+# - International endpoint: https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (default)
+# - Mainland China endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
+# - Coding plan endpoint: https://coding.dashscope.aliyuncs.com/v1
+qwen_base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+qwen_model = "qwen-plus"
+
+# Model selection
+model = "gemini-3.8-flash"
+
+# Model temperature (0.0 to 2.0)
+temperature = 0.0
+
+# System preamble / instructions
+preamble = "You are an investigator."
+
+# Variant to run with default 'cargo run'
+variant = "typed"
+
+[prompt]
+query = "Hello! Tell me a one-sentence joke about programming."
+
+[prompt_typed]
+query = "Find all homecides in Berlin at January 2014. With the source."
+#query = "Give me the GDP of Germany for each year 1990 to 2025"
+
+# SurrealDB database configuration
+[db]
+# Endpoint: "mem://" for in-memory embedded DB, or "ws://localhost:8000" / "http://localhost:8000"
+endpoint = "wss://app.ux-ti.com/rpc"
+namespace = "ai"
+database = "data"
+username = "ai"
+#password = ""
+
+# Tonic gRPC Server configuration
+[grpc]
+host = "127.0.0.1"
+port = 50051
+
+# gRPC Endpoint Authentication (OAuth 2.0 & Admin Basic Auth)
+[grpc.auth]
+admin_user = "admin"
+# admin_password = "YOUR_ADMIN_PASSWORD_HERE" # Can also be set via ADMIN_PASSWORD env var or OpenBao/Vault
+
+[grpc.auth.oauth]
+# FerrisKey OpenID Connect Discovery
+well_known_url = "https://auth.ux-ti.com/api/realms/master/.well-known/openid-configuration"
+# Optional audience validation (FerrisKey default realm audience is "master-realm")
+# audience = "master-realm"
+
+# OpenBao / HashiCorp Vault configuration for secret resolution
+[vault]
+enabled = true
+address = "https://secrets.ux-ti.com"
+#token = "" # Can also be set via OPENBAO_TOKEN / VAULT_TOKEN env var
+namespace = "civo"
+mount = "kv"
+path = "ai/config"
+kv_version = 2
+auto_renew = true
+
+[vault.keys]
+grpc_oauth_client_id = ["oauth-clientname", "oauth_client_id", "client_id"]
+grpc_oauth_secret = ["outh-secret", "oauth-secret", "ai_grpc_oauth_secret"]
+gemini_api_key = ["gemini_api_key", "ai_gemini_api_key", "api_key"]
+qwen_api_key = ["qwen_api_key", "dashscope_api_key", "qwen", "dashscope", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "api_key_qwen"]
+qwen_base_url = ["qwen_base_url", "qwen_url", "dashscope_base_url", "dashscope_url"]
