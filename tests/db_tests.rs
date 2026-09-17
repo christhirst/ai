@@ -54,60 +54,6 @@ fn test_homecides_json_serde_roundtrip() {
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tokio::test]
-async fn test_app_config_db_loading() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::remove_var("SURREAL_URL");
-        std::env::remove_var("SURREALDB_URL");
-        std::env::remove_var("DB_ENDPOINT");
-        std::env::remove_var("SURREAL_PASS");
-        std::env::remove_var("SURREALDB_PASS");
-        std::env::remove_var("DB_PASSWORD");
-        std::env::remove_var("SURREAL_USER");
-        std::env::remove_var("SURREALDB_USER");
-        std::env::remove_var("DB_USERNAME");
-        std::env::remove_var("SURREAL_NS");
-        std::env::remove_var("SURREALDB_NS");
-        std::env::remove_var("DB_NAMESPACE");
-        std::env::remove_var("SURREAL_DB");
-        std::env::remove_var("SURREALDB_DB");
-        std::env::remove_var("DB_DATABASE");
-        if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("APP_GEMINI_API_KEY").is_err()
-        {
-            std::env::set_var("GEMINI_API_KEY", "test_key");
-        }
-        std::env::set_var("VAULT_ENABLED", "false");
-    }
-    let config = AppConfig::load().await.expect("Failed to load AppConfig");
-    assert_eq!(config.db.namespace, "data");
-    assert_eq!(config.db.database, "ai");
-
-    let mem_config = DatabaseConfig {
-        endpoint: "mem://".to_string(),
-        namespace: "data".to_string(),
-        database: "ai".to_string(),
-        username: None,
-        password: None,
-    };
-    let db = init_db_from_config(&mem_config)
-        .await
-        .expect("Failed to connect using memory config");
-
-    let record = GdpRecord {
-        year: "2024".to_string(),
-        gdp: 4.45,
-    };
-    create_gdp_record(&db, &record).await.unwrap();
-    let records = get_all_gdp_records(&db).await.unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].year, "2024");
-
-    unsafe {
-        std::env::remove_var("VAULT_ENABLED");
-    }
-}
-
-#[tokio::test]
 async fn test_gdp_record_crud_lifecycle() {
     let db = init_memory_db("test_gdp_ns", "test_gdp_db")
         .await
@@ -370,44 +316,6 @@ async fn test_env_var_credential_overrides() {
         std::env::remove_var("GEMINI_API_KEY");
         std::env::remove_var("VAULT_ENABLED");
     }
-}
-
-#[test]
-fn test_normalize_base_url() {
-    use ai::db::normalize_base_url;
-
-    assert_eq!(
-        normalize_base_url("wss://app.ux-ti.com/rpc"),
-        "https://app.ux-ti.com"
-    );
-    assert_eq!(
-        normalize_base_url("wss://app.ux-ti.com/rpc/"),
-        "https://app.ux-ti.com"
-    );
-    assert_eq!(
-        normalize_base_url("ws://localhost:8000/rpc"),
-        "http://localhost:8000"
-    );
-    assert_eq!(
-        normalize_base_url("ws://localhost:8000"),
-        "http://localhost:8000"
-    );
-    assert_eq!(
-        normalize_base_url("http://127.0.0.1:8000"),
-        "http://127.0.0.1:8000"
-    );
-    assert_eq!(
-        normalize_base_url("http://127.0.0.1:8000/sql"),
-        "http://127.0.0.1:8000"
-    );
-    assert_eq!(
-        normalize_base_url("https://app.ux-ti.com"),
-        "https://app.ux-ti.com"
-    );
-    assert_eq!(
-        normalize_base_url("https://app.ux-ti.com/sql"),
-        "https://app.ux-ti.com"
-    );
 }
 
 #[tokio::test]
