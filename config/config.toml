@@ -67,6 +67,9 @@ kv_version = 2
 auto_renew = true
 
 [vault.keys]
+db_username = ["db_user", "db_username", "username", "SURREAL_USER"]
+db_password = ["db_password", "password", "SURREAL_PASS"]
+grpc_admin_password = ["ai_admin", "grpc_admin_password", "admin_password", "ai_admin_password"]
 grpc_oauth_client_id = ["oauth-clientname", "oauth_client_id", "client_id"]
 grpc_oauth_secret = ["outh-secret", "oauth-secret", "ai_grpc_oauth_secret"]
 gemini_api_key = ["gemini_api_key", "ai_gemini_api_key", "api_key"]

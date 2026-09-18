@@ -994,3 +994,238 @@ async fn test_oauth_startup_check_integration() {
         .expect("Bypassed auth check should return Ok(None)");
     assert!(report_bypassed.is_none());
 }
+
+#[tokio::test]
+async fn test_ai_admin_vault_secret_and_basic_auth() {
+    use ai::grpc::AuthValidator;
+    use base64::Engine;
+
+    // 1. Verify apply_secret_data picks up "ai_admin"
+    let mut config = AppConfig::default();
+    let secret_json = serde_json::json!({
+        "ai_admin": "super_secret_pw_123",
+        "gemini_api_key": "test_gemini"
+    });
+    let count = config.apply_secret_data(secret_json.as_object().unwrap());
+    assert!(count >= 2);
+    assert_eq!(
+        config.grpc.auth.admin_password.as_deref(),
+        Some("super_secret_pw_123")
+    );
+    assert!(config.grpc.auth.is_active());
+
+    // 2. Verify AuthValidator accepts both "admin" and "ai_admin" with the password
+    let validator = AuthValidator::new(&config.grpc.auth);
+
+    // a) User "admin"
+    let basic_admin = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("admin:super_secret_pw_123")
+    );
+    let auth_identity = validator
+        .validate_auth_header(Some(&basic_admin))
+        .await
+        .expect("Valid basic auth for admin should succeed");
+    assert!(matches!(auth_identity, ai::grpc::AuthIdentity::Admin(u) if u == "admin"));
+
+    // b) User "ai_admin"
+    let basic_ai_admin = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("ai_admin:super_secret_pw_123")
+    );
+    let auth_identity_2 = validator
+        .validate_auth_header(Some(&basic_ai_admin))
+        .await
+        .expect("Valid basic auth for ai_admin should succeed");
+    assert!(matches!(auth_identity_2, ai::grpc::AuthIdentity::Admin(u) if u == "ai_admin"));
+
+    // c) Invalid password
+    let bad_pass = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("admin:wrong_password")
+    );
+    let err = validator
+        .validate_auth_header(Some(&bad_pass))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // d) Invalid username
+    let bad_user = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("unknown_user:super_secret_pw_123")
+    );
+    let err = validator
+        .validate_auth_header(Some(&bad_user))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn test_grpc_reflection_v1_and_v1alpha() {
+    use std::net::TcpListener;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tonic_reflection::pb::v1::server_reflection_client::ServerReflectionClient as ReflectionClientV1;
+    use tonic_reflection::pb::v1::{
+        ServerReflectionRequest as ReflectionReqV1,
+        server_reflection_request::MessageRequest as MessageReqV1,
+        server_reflection_response::MessageResponse as MessageRespV1,
+    };
+    use tonic_reflection::pb::v1alpha::server_reflection_client::ServerReflectionClient as ReflectionClientV1Alpha;
+    use tonic_reflection::pb::v1alpha::{
+        ServerReflectionRequest as ReflectionReqV1Alpha,
+        server_reflection_request::MessageRequest as MessageReqV1Alpha,
+        server_reflection_response::MessageResponse as MessageRespV1Alpha,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let db = init_memory_db("refl_ns", "refl_db")
+        .await
+        .expect("Failed to init memory db");
+    let app_db = Arc::new(AppDb::Local(db));
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "test_key".to_string(),
+        model: "gemini-3.7-flash".to_string(),
+        db: DatabaseConfig {
+            endpoint: "mem://".to_string(),
+            namespace: "refl_ns".to_string(),
+            database: "refl_db".to_string(),
+            username: None,
+            password: None,
+        },
+        grpc: GrpcConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let service = TablePopulatorServiceImpl::new(config.clone(), app_db.clone());
+    let server = TablePopulatorServiceServer::new(service);
+
+    let reflection_v1 = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(ai::grpc::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("Failed to build v1 reflection service");
+    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(ai::grpc::FILE_DESCRIPTOR_SET)
+        .build_v1alpha()
+        .expect("Failed to build v1alpha reflection service");
+
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(reflection_v1)
+            .add_service(reflection_v1alpha)
+            .add_service(server)
+            .serve(addr)
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .expect("Failed to connect channel");
+
+    // 1. Test v1 Reflection
+    {
+        let mut client = ReflectionClientV1::new(channel.clone());
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(ReflectionReqV1 {
+            host: String::new(),
+            message_request: Some(MessageReqV1::ListServices(String::new())),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut resp_stream = client
+            .server_reflection_info(ReceiverStream::new(rx))
+            .await
+            .expect("v1 server_reflection_info call failed")
+            .into_inner();
+
+        let resp = resp_stream
+            .message()
+            .await
+            .expect("Stream read failed")
+            .expect("Expected v1 reflection response");
+
+        match resp.message_response {
+            Some(MessageRespV1::ListServicesResponse(services_resp)) => {
+                let service_names: Vec<String> =
+                    services_resp.service.into_iter().map(|s| s.name).collect();
+                assert!(
+                    service_names
+                        .iter()
+                        .any(|s| s == "table_populator.TablePopulatorService"),
+                    "table_populator.TablePopulatorService should be in listed v1 services: {:?}",
+                    service_names
+                );
+                assert!(
+                    service_names
+                        .iter()
+                        .any(|s| s == "grpc.reflection.v1.ServerReflection"),
+                    "grpc.reflection.v1.ServerReflection should be in listed v1 services: {:?}",
+                    service_names
+                );
+            }
+            other => panic!("Unexpected response for v1 ListServices: {:?}", other),
+        }
+    }
+
+    // 2. Test v1alpha Reflection
+    {
+        let mut client = ReflectionClientV1Alpha::new(channel);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(ReflectionReqV1Alpha {
+            host: String::new(),
+            message_request: Some(MessageReqV1Alpha::ListServices(String::new())),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut resp_stream = client
+            .server_reflection_info(ReceiverStream::new(rx))
+            .await
+            .expect("v1alpha server_reflection_info call failed")
+            .into_inner();
+
+        let resp = resp_stream
+            .message()
+            .await
+            .expect("Stream read failed")
+            .expect("Expected v1alpha reflection response");
+
+        match resp.message_response {
+            Some(MessageRespV1Alpha::ListServicesResponse(services_resp)) => {
+                let service_names: Vec<String> =
+                    services_resp.service.into_iter().map(|s| s.name).collect();
+                assert!(
+                    service_names
+                        .iter()
+                        .any(|s| s == "table_populator.TablePopulatorService"),
+                    "table_populator.TablePopulatorService should be in listed v1alpha services: {:?}",
+                    service_names
+                );
+                assert!(
+                    service_names
+                        .iter()
+                        .any(|s| s == "grpc.reflection.v1alpha.ServerReflection"),
+                    "grpc.reflection.v1alpha.ServerReflection should be in listed v1alpha services: {:?}",
+                    service_names
+                );
+            }
+            other => panic!("Unexpected response for v1alpha ListServices: {:?}", other),
+        }
+    }
+}

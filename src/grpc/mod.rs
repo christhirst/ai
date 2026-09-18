@@ -41,9 +41,12 @@ pub async fn start_grpc_server(
 
     let service = TablePopulatorServiceImpl::new(config.clone(), db);
     let svc = TablePopulatorServiceServer::new(service);
-    let reflection = tonic_reflection::server::Builder::configure()
+    let reflection_v1 = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
+    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1alpha()?;
 
     println!("Starting Tonic gRPC TablePopulator server on {addr}...");
     tracing::info!(host = %config.grpc.host, port = %config.grpc.port, "Tonic gRPC server listening");
@@ -62,14 +65,16 @@ pub async fn start_grpc_server(
         let auth_layer = create_auth_layer(&config.grpc.auth)?;
         Server::builder()
             .layer(auth_layer)
-            .add_service(reflection)
+            .add_service(reflection_v1)
+            .add_service(reflection_v1alpha)
             .add_service(svc)
             .serve(addr)
             .await?;
     } else {
         println!("gRPC Authentication: DISABLED (public access)");
         Server::builder()
-            .add_service(reflection)
+            .add_service(reflection_v1)
+            .add_service(reflection_v1alpha)
             .add_service(svc)
             .serve(addr)
             .await?;

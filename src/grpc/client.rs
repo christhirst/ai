@@ -62,12 +62,19 @@ pub async fn connect_client_with_auth(
     } else {
         format!("http://{addr}")
     };
-    let channel = Channel::from_shared(endpoint)?.connect().await?;
+    let uri: tonic::codegen::http::Uri = endpoint.parse()?;
+    let mut channel_endpoint = tonic::transport::Endpoint::from_shared(endpoint.clone())?;
+    if endpoint.starts_with("https://") {
+        let tls = tonic::transport::ClientTlsConfig::new().with_webpki_roots();
+        channel_endpoint = channel_endpoint.tls_config(tls)?;
+    }
+    let channel = channel_endpoint.connect().await?;
     let header_val = match auth {
         Some(a) => Some(a.to_header_value()?),
         None => None,
     };
     let interceptor = ClientAuthInterceptor { header_val };
-    let client = TablePopulatorServiceClient::with_interceptor(channel, interceptor);
+    let intercepted = tonic::service::interceptor::InterceptedService::new(channel, interceptor);
+    let client = TablePopulatorServiceClient::with_origin(intercepted, uri);
     Ok(client)
 }

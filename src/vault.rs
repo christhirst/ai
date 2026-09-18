@@ -217,6 +217,7 @@ pub fn default_db_password_keys() -> Vec<String> {
 
 pub fn default_db_username_keys() -> Vec<String> {
     vec![
+        "db_user".to_string(),
         "db_username".to_string(),
         "username".to_string(),
         "SURREAL_USER".to_string(),
@@ -249,8 +250,10 @@ pub fn default_db_database_keys() -> Vec<String> {
 
 pub fn default_grpc_admin_password_keys() -> Vec<String> {
     vec![
+        "ai_admin".to_string(),
         "grpc_admin_password".to_string(),
         "admin_password".to_string(),
+        "ai_admin_password".to_string(),
     ]
 }
 
