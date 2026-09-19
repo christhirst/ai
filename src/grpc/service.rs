@@ -407,10 +407,10 @@ impl TablePopulatorServiceImpl {
             query.push_str(&where_clauses.join(" AND "));
         }
 
-        if let Some(lim) = req.limit {
-            if lim > 0 {
-                query.push_str(&format!(" LIMIT {lim}"));
-            }
+        if let Some(lim) = req.limit
+            && lim > 0
+        {
+            query.push_str(&format!(" LIMIT {lim}"));
         }
         query.push(';');
 
@@ -463,7 +463,11 @@ impl TablePopulatorServiceImpl {
             Some(serde_json::Value::String(s)) => s.clone(),
             Some(serde_json::Value::Object(o)) => {
                 if let (Some(tb), Some(id)) = (o.get("tb"), o.get("id")) {
-                    format!("{}:{}", tb.as_str().unwrap_or_default(), id.as_str().unwrap_or_default())
+                    format!(
+                        "{}:{}",
+                        tb.as_str().unwrap_or_default(),
+                        id.as_str().unwrap_or_default()
+                    )
                 } else {
                     serde_json::to_string(o).unwrap_or_default()
                 }
@@ -472,7 +476,8 @@ impl TablePopulatorServiceImpl {
             None => String::new(),
         };
 
-        let record_json = serde_json::to_string_pretty(record).unwrap_or_else(|_| record.to_string());
+        let record_json =
+            serde_json::to_string_pretty(record).unwrap_or_else(|_| record.to_string());
 
         let outcome = match fact_check_record(
             &self.config,
@@ -1116,8 +1121,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         Ok(Response::new(response))
     }
 
-    type FactCheckEntriesStreamStream =
-        ReceiverStream<Result<FactCheckResult, Status>>;
+    type FactCheckEntriesStreamStream = ReceiverStream<Result<FactCheckResult, Status>>;
 
     async fn fact_check_entries_stream(
         &self,

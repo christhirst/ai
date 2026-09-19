@@ -526,7 +526,8 @@ pub async fn fact_check_record(
                 None => None,
             };
 
-            let effective_thinking_level = normalized_thinking_level.unwrap_or_else(|| "low".to_string());
+            let effective_thinking_level =
+                normalized_thinking_level.unwrap_or_else(|| "low".to_string());
 
             let mut additional_params = serde_json::Map::new();
             additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
@@ -605,9 +606,10 @@ pub async fn fact_check_record(
     };
 
     let parsed_records = parse_json_response(&raw_response)?;
-    let first = parsed_records.into_iter().next().ok_or_else(|| {
-        "Fact-check response did not contain a valid JSON object"
-    })?;
+    let first = parsed_records
+        .into_iter()
+        .next()
+        .ok_or("Fact-check response did not contain a valid JSON object")?;
 
     let verdict = first
         .get("verdict")

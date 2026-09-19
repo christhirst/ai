@@ -4,8 +4,8 @@ use ai::db::{
     insert_dynamic_records, set_table_comment,
 };
 use ai::grpc::{
-    ExecuteSurrealQlRequest, FactCheckEntriesRequest, GetTableInfoRequest,
-    ListTablesRequest, PopulateTableIntervalRequest, PopulateTableRequest, TablePopulatorService,
+    ExecuteSurrealQlRequest, FactCheckEntriesRequest, GetTableInfoRequest, ListTablesRequest,
+    PopulateTableIntervalRequest, PopulateTableRequest, TablePopulatorService,
     TablePopulatorServiceImpl, TablePopulatorServiceServer, connect_client, parse_json_response,
     sanitize_and_map_records,
 };
@@ -1258,7 +1258,10 @@ async fn test_fact_check_entries_validation() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("At least one filter must be provided"));
+    assert!(
+        err.message()
+            .contains("At least one filter must be provided")
+    );
 }
 
 #[tokio::test]
@@ -1282,9 +1285,7 @@ async fn test_fact_check_entries_query_filtering_and_status() {
         { incident_date: <datetime>'2024-06-20T00:00:00Z', fetched_at: <datetime>'2024-07-01T12:00:00Z', status: 'Pending', raw_text: 'Burglary in Munich' },
         { incident_date: <datetime>'2024-11-05T00:00:00Z', fetched_at: <datetime>'2024-11-10T08:00:00Z', status: 'Checked', raw_text: 'Theft in Hamburg' }
     ];";
-    let inserted_val = execute_surrealql(&*app_db, insert_sql)
-        .await
-        .unwrap();
+    let inserted_val = execute_surrealql(&*app_db, insert_sql).await.unwrap();
 
     let config = Arc::new(AppConfig {
         gemini_api_key: "".to_string(),
@@ -1370,9 +1371,7 @@ async fn test_fact_check_entries_stream() {
         { incident_date: <datetime>'2025-01-01T00:00:00Z', status: 'Pending', msg: 'Alert 1' },
         { incident_date: <datetime>'2025-01-02T00:00:00Z', status: 'Pending', msg: 'Alert 2' }
     ];";
-    execute_surrealql(&*app_db, insert_sql)
-        .await
-        .unwrap();
+    execute_surrealql(&*app_db, insert_sql).await.unwrap();
 
     let config = Arc::new(AppConfig::default());
     let service = TablePopulatorServiceImpl::new(config, app_db);
@@ -1475,9 +1474,12 @@ async fn test_fact_check_db_status_update_behavior() {
         .unwrap();
 
     // Update status to 'Discarded_Irrelevant' for B
-    execute_surrealql(&*app_db, &format!("UPDATE {id_b} SET status = 'Discarded_Irrelevant';"))
-        .await
-        .unwrap();
+    execute_surrealql(
+        &*app_db,
+        &format!("UPDATE {id_b} SET status = 'Discarded_Irrelevant';"),
+    )
+    .await
+    .unwrap();
 
     // Verify status was persisted in SurrealDB
     let q_a = execute_surrealql(&*app_db, &format!("SELECT status FROM {id_a};"))
@@ -1490,4 +1492,3 @@ async fn test_fact_check_db_status_update_behavior() {
         .unwrap();
     assert_eq!(q_b[0]["status"], "Discarded_Irrelevant");
 }
-
