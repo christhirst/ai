@@ -1,6 +1,7 @@
 use crate::config::{AppConfig, ModelProvider};
 use rig::prelude::*;
 use rig::providers::{gemini, openai};
+use serde_json::json;
 
 /// Executes the standard (untyped) text prompt variant.
 pub async fn run(config: &AppConfig) -> Result<String, Box<dyn std::error::Error>> {
@@ -42,6 +43,14 @@ pub async fn run(config: &AppConfig) -> Result<String, Box<dyn std::error::Error
             if let Some(preamble) = &config.preamble {
                 builder = builder.preamble(preamble);
             }
+
+            builder = builder.additional_params(json!({
+                "enable_search": true,
+                "search_options": {
+                    "forced_search": true,
+                    "search_strategy": "max"
+                }
+            }));
 
             if let Some(temperature) = config.temperature {
                 builder = builder.temperature(temperature);

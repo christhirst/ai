@@ -163,7 +163,11 @@ pub async fn run(config: &AppConfig) -> Result<Vec<Homecides>, Box<dyn std::erro
             builder = builder
                 .preamble(&system_instructions)
                 .additional_params(json!({
-                    "enable_search": true
+                    "enable_search": true,
+                    "search_options": {
+                        "forced_search": true,
+                        "search_strategy": "max"
+                    }
                 }));
 
             if let Some(temperature) = config.temperature {

@@ -164,7 +164,11 @@ pub async fn extract_table_data(
 
             if enable_grounding {
                 builder = builder.additional_params(json!({
-                    "enable_search": true
+                    "enable_search": true,
+                    "search_options": {
+                        "forced_search": true,
+                        "search_strategy": "max"
+                    }
                 }));
             }
 
