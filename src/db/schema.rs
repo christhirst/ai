@@ -48,8 +48,13 @@ impl<C: Connection + Send + Sync> SchemaIntrospectable for Surreal<C> {
         sql: &str,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         let mut response = self.query(sql).await?;
-        let val: Option<serde_json::Value> = response.take(0)?;
-        Ok(val.unwrap_or(serde_json::Value::Null))
+        if let Ok(vec) = response.take::<Vec<serde_json::Value>>(0) {
+            Ok(serde_json::Value::Array(vec))
+        } else if let Ok(val) = response.take::<Option<serde_json::Value>>(0) {
+            Ok(val.unwrap_or(serde_json::Value::Null))
+        } else {
+            Ok(serde_json::Value::Null)
+        }
     }
 }
 

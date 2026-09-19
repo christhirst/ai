@@ -21,6 +21,12 @@ service TablePopulatorService {
 
   // Streaming variant that streams each iteration result as it completes.
   rpc PopulateTableIntervalStream (PopulateTableIntervalRequest) returns (stream IntervalIterationResult);
+
+  // Fact-checks existing records by sending them to an LLM with web grounding.
+  rpc FactCheckEntries (FactCheckEntriesRequest) returns (FactCheckEntriesResponse);
+
+  // Streaming variant that emits each fact-check result as it completes.
+  rpc FactCheckEntriesStream (FactCheckEntriesRequest) returns (stream FactCheckResult);
 }
 
 message PopulateTableRequest {
@@ -156,5 +162,76 @@ message PopulateTableIntervalResponse {
   uint32 failed_iterations = 5;
   repeated IntervalIterationResult iterations = 6;
   string message = 7;
+}
+
+// Filter: provide record_ids, a date range (on incident_date or fetched_at), or status_filter.
+message FactCheckEntriesRequest {
+  // Target SurrealDB table name
+  string table_name = 1;
+  // Optional SurrealDB namespace override (defaults to config)
+  optional string namespace = 2;
+  // Optional SurrealDB database override (defaults to config)
+  optional string database = 3;
+  // Explicit list of record IDs to fact-check (e.g. ["crime_stats:abc123"] or ["abc123"])
+  repeated string record_ids = 4;
+  // Date range filter: start date (inclusive, e.g. "2000-01-01", "2000-01", "2000")
+  optional string start_date = 5;
+  // Date range filter: end date (inclusive, e.g. "2000-12-31")
+  optional string end_date = 6;
+  // Which date field to filter on: e.g. "incident_date" (day of crime/event) or "fetched_at" (search execution date) (default: "incident_date")
+  optional string date_field = 7;
+  // Optional filter by current status (e.g. "Pending")
+  optional string status_filter = 8;
+  // Optional maximum number of records to process in this request
+  optional uint64 limit = 9;
+  // Whether to update the record status in SurrealDB to "Checked" or "Discarded_Irrelevant" (default: true)
+  optional bool update_db_status = 10;
+  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  optional string provider = 11;
+  // Optional LLM model override
+  optional string model = 12;
+  // Optional model temperature override
+  optional double temperature = 13;
+  // Optional system preamble override
+  optional string preamble = 14;
+  // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high"
+  optional string thinking_level = 15;
+  // Optional LLM base URL override
+  optional string base_url = 16;
+}
+
+message FactCheckResult {
+  // The record ID from SurrealDB (e.g. "crime_stats:abc123")
+  string record_id = 1;
+  // Original record data as JSON
+  string record_json = 2;
+  // Verdict: "confirmed", "disputed", or "unverifiable"
+  string verdict = 3;
+  // Status assigned: "Checked" or "Discarded_Irrelevant"
+  string status = 4;
+  // LLM explanation of the fact-check result
+  string explanation = 5;
+  // Supporting source URLs found during grounding
+  repeated string sources = 6;
+  // Whether this individual check succeeded
+  bool success = 7;
+  // Error or status message
+  string message = 8;
+  // Whether the status field in SurrealDB was updated
+  bool db_updated = 9;
+}
+
+message FactCheckEntriesResponse {
+  bool success = 1;
+  string table_name = 2;
+  uint64 total_checked = 3;
+  uint64 confirmed_count = 4;
+  uint64 disputed_count = 5;
+  uint64 unverifiable_count = 6;
+  uint64 failed_count = 7;
+  uint64 checked_status_count = 8;
+  uint64 discarded_status_count = 9;
+  repeated FactCheckResult results = 10;
+  string message = 11;
 }
 

@@ -413,3 +413,235 @@ fn example_value_for_field(name: &str, type_str: &str) -> Option<serde_json::Val
         }
     }
 }
+
+/// Fact-checking outcome returned from an LLM.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FactCheckOutcome {
+    pub verdict: String,
+    pub status: String,
+    pub explanation: String,
+    pub sources: Vec<String>,
+}
+
+/// Fact-checks a single database record by querying Gemini or Qwen with web grounding enabled.
+#[allow(clippy::too_many_arguments)]
+pub async fn fact_check_record(
+    config: &AppConfig,
+    record_json: &str,
+    table_name: &str,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+    temperature_override: Option<f64>,
+    preamble_override: Option<&str>,
+    thinking_level_override: Option<&str>,
+    base_url_override: Option<&str>,
+) -> Result<FactCheckOutcome, Box<dyn std::error::Error>> {
+    let provider = match provider_override {
+        Some(p) if !p.trim().is_empty() => p
+            .parse::<ModelProvider>()
+            .map_err(Box::<dyn std::error::Error>::from)?,
+        _ => config.provider,
+    };
+
+    let model = match model_override.filter(|m| !m.trim().is_empty()) {
+        Some(m) => m,
+        None => match provider {
+            ModelProvider::Gemini => &config.model,
+            ModelProvider::Qwen => {
+                if config.model.contains("gemini") {
+                    &config.qwen_model
+                } else {
+                    &config.model
+                }
+            }
+        },
+    };
+
+    let base_preamble = preamble_override
+        .or(config.preamble.as_deref())
+        .unwrap_or("You are a meticulous investigative fact-checking assistant.");
+
+    let system_instructions = format!(
+        "{base_preamble}\n\n\
+        TASK:\n\
+        You must fact-check the factual claims in the provided record for table '{table_name}'.\n\
+        Search the web for authoritative reporting, official police/court releases, or credible sources.\n\
+        \n\
+        CRITICAL DISTINCTIONS:\n\
+        - 'incident_date': When the reported event, crime, or incident actually happened.\n\
+        - 'fetched_at': When this record was originally retrieved or extracted by the system.\n\
+        \n\
+        OUTPUT FORMAT:\n\
+        Return ONLY a single valid JSON object (no markdown code blocks, no other text):\n\
+        {{\n\
+          \"verdict\": \"confirmed\" | \"disputed\" | \"unverifiable\",\n\
+          \"status\": \"Checked\" | \"Discarded_Irrelevant\",\n\
+          \"explanation\": \"Detailed explanation citing facts found during research\",\n\
+          \"sources\": [\"https://...\"]\n\
+        }}\n\
+        \n\
+        VERDICT & STATUS RULES:\n\
+        1. If the core factual claims are corroborated by credible sources: verdict=\"confirmed\", status=\"Checked\".\n\
+        2. If the claims are contradicted, false, fabricated, or a known hoax: verdict=\"disputed\", status=\"Discarded_Irrelevant\".\n\
+        3. If there is insufficient credible evidence online to verify or the record is irrelevant: verdict=\"unverifiable\", status=\"Discarded_Irrelevant\"."
+    );
+
+    let prompt = format!(
+        "Please fact-check this database record from table '{table_name}':\n\n\
+        ```json\n\
+        {record_json}\n\
+        ```\n\n\
+        Investigate whether the incident, facts, locations, and dates reported here are accurate and corroborated by credible online sources.\n\
+        Return ONLY the requested JSON object."
+    );
+
+    let raw_response = match provider {
+        ModelProvider::Gemini => {
+            if !model.contains("gemini-3") {
+                return Err(format!(
+                    "Unsupported model '{model}': only Gemini 3+ models (e.g. gemini-3.7-flash, gemini-3.8-flash) are supported for Gemini provider."
+                ).into());
+            }
+
+            if config.gemini_api_key.trim().is_empty() {
+                return Err("Gemini API key is not configured. Please set GEMINI_API_KEY, gemini_api_key in config, or OpenBao/Vault".into());
+            }
+
+            let client = gemini::Client::new(&config.gemini_api_key)?;
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            let normalized_thinking_level = match thinking_level_override
+                .map(|s| s.trim().to_lowercase())
+            {
+                Some(s) if s.is_empty() => None,
+                Some(s) => match s.as_str() {
+                    "minimal" | "low" | "medium" | "high" => Some(s),
+                    other => {
+                        return Err(format!(
+                            "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
+                        ).into());
+                    }
+                },
+                None => None,
+            };
+
+            let effective_thinking_level = normalized_thinking_level.unwrap_or_else(|| "low".to_string());
+
+            let mut additional_params = serde_json::Map::new();
+            additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+
+            let mut gen_config = serde_json::Map::new();
+            gen_config.insert(
+                "thinkingConfig".to_string(),
+                json!({"thinkingLevel": effective_thinking_level}),
+            );
+            additional_params.insert(
+                "generationConfig".to_string(),
+                serde_json::Value::Object(gen_config),
+            );
+
+            builder = builder.additional_params(serde_json::Value::Object(additional_params));
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = "gemini",
+                model = %model,
+                table = %table_name,
+                "FactCheck-Agent: requesting factual verification from Gemini agent"
+            );
+
+            agent.prompt(&prompt).await?
+        }
+        ModelProvider::Qwen => {
+            if config.qwen_api_key.trim().is_empty() {
+                return Err("Qwen API key is not configured. Please set QWEN_API_KEY / DASHSCOPE_API_KEY, qwen_api_key in config, or OpenBao/Vault".into());
+            }
+
+            let effective_base_url = base_url_override
+                .map(|u| u.trim().trim_end_matches('/'))
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| config.qwen_base_url.trim_end_matches('/'));
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(&config.qwen_api_key)
+                .base_url(effective_base_url)
+                .build()?;
+
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            builder = builder.additional_params(json!({
+                "enable_search": true,
+                "search_options": {
+                    "forced_search": true,
+                    "search_strategy": "max"
+                }
+            }));
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = "qwen",
+                model = %model,
+                base_url = %effective_base_url,
+                table = %table_name,
+                "FactCheck-Agent: requesting factual verification from Qwen agent"
+            );
+
+            agent.prompt(&prompt).await?
+        }
+    };
+
+    let parsed_records = parse_json_response(&raw_response)?;
+    let first = parsed_records.into_iter().next().ok_or_else(|| {
+        "Fact-check response did not contain a valid JSON object"
+    })?;
+
+    let verdict = first
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unverifiable")
+        .trim()
+        .to_lowercase();
+
+    let status = if verdict == "confirmed" {
+        "Checked".to_string()
+    } else {
+        "Discarded_Irrelevant".to_string()
+    };
+
+    let explanation = first
+        .get("explanation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("No explanation provided")
+        .to_string();
+
+    let sources = first
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(FactCheckOutcome {
+        verdict,
+        status,
+        explanation,
+        sources,
+    })
+}

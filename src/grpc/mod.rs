@@ -13,7 +13,7 @@ pub use auth::{
     check_oauth_at_startup, create_auth_layer, discover_oidc_endpoints,
 };
 pub use client::{AgentGrpcClient, ClientAuth, connect_client, connect_client_with_auth};
-pub use extractor::{extract_table_data, parse_json_response};
+pub use extractor::{FactCheckOutcome, extract_table_data, fact_check_record, parse_json_response};
 pub use intervals::{
     DateIntervalStep, IntervalType, generate_interval_steps, inject_timeframe_into_prompt,
     parse_interval,

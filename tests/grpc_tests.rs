@@ -4,9 +4,10 @@ use ai::db::{
     insert_dynamic_records, set_table_comment,
 };
 use ai::grpc::{
-    ExecuteSurrealQlRequest, GetTableInfoRequest, ListTablesRequest, PopulateTableIntervalRequest,
-    PopulateTableRequest, TablePopulatorService, TablePopulatorServiceImpl,
-    TablePopulatorServiceServer, connect_client, parse_json_response, sanitize_and_map_records,
+    ExecuteSurrealQlRequest, FactCheckEntriesRequest, GetTableInfoRequest,
+    ListTablesRequest, PopulateTableIntervalRequest, PopulateTableRequest, TablePopulatorService,
+    TablePopulatorServiceImpl, TablePopulatorServiceServer, connect_client, parse_json_response,
+    sanitize_and_map_records,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -1229,3 +1230,264 @@ async fn test_grpc_reflection_v1_and_v1alpha() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_fact_check_entries_validation() {
+    let db = init_memory_db("fc_ns", "fc_db").await.unwrap();
+    let app_db = Arc::new(AppDb::Local(db));
+    let config = Arc::new(AppConfig::default());
+    let service = TablePopulatorServiceImpl::new(config, app_db);
+
+    // 1. Empty table name
+    let err = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("Table name must not be empty"));
+
+    // 2. Empty filters
+    let err = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "crimes".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("At least one filter must be provided"));
+}
+
+#[tokio::test]
+async fn test_fact_check_entries_query_filtering_and_status() {
+    let db = init_memory_db("fc_filter_ns", "fc_filter_db")
+        .await
+        .unwrap();
+    let app_db = Arc::new(AppDb::Local(db));
+
+    // 1. Define table schema
+    let ddl = "DEFINE TABLE incidents SCHEMAFULL; \
+               DEFINE FIELD incident_date ON TABLE incidents TYPE datetime; \
+               DEFINE FIELD fetched_at ON TABLE incidents TYPE datetime; \
+               DEFINE FIELD status ON TABLE incidents TYPE string DEFAULT 'Pending'; \
+               DEFINE FIELD raw_text ON TABLE incidents TYPE string;";
+    execute_surrealql(&*app_db, ddl).await.unwrap();
+
+    // 2. Insert records with incident_date, fetched_at, and status
+    let insert_sql = "INSERT INTO incidents [
+        { incident_date: <datetime>'2024-01-15T00:00:00Z', fetched_at: <datetime>'2024-02-01T10:00:00Z', status: 'Pending', raw_text: 'Robbery in Berlin' },
+        { incident_date: <datetime>'2024-06-20T00:00:00Z', fetched_at: <datetime>'2024-07-01T12:00:00Z', status: 'Pending', raw_text: 'Burglary in Munich' },
+        { incident_date: <datetime>'2024-11-05T00:00:00Z', fetched_at: <datetime>'2024-11-10T08:00:00Z', status: 'Checked', raw_text: 'Theft in Hamburg' }
+    ];";
+    let inserted_val = execute_surrealql(&*app_db, insert_sql)
+        .await
+        .unwrap();
+
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "".to_string(),
+        ..Default::default()
+    });
+    let service = TablePopulatorServiceImpl::new(config, app_db.clone());
+
+    // 3. Filter by incident_date date range (Jan to Mar 2024) -> only record 1 (Berlin)
+    let resp = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "incidents".to_string(),
+            start_date: Some("2024-01-01".to_string()),
+            end_date: Some("2024-03-31".to_string()),
+            date_field: Some("incident_date".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total_checked, 1);
+    assert!(resp.results[0].record_json.contains("Berlin"));
+
+    // 4. Filter by fetched_at date range (July 2024) -> only record 2 (Munich)
+    let resp = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "incidents".to_string(),
+            start_date: Some("2024-07-01".to_string()),
+            end_date: Some("2024-07-31".to_string()),
+            date_field: Some("fetched_at".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total_checked, 1);
+    assert!(resp.results[0].record_json.contains("Munich"));
+
+    // 5. Filter by status 'Checked' -> only record 3 (Hamburg)
+    let resp = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "incidents".to_string(),
+            status_filter: Some("Checked".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total_checked, 1);
+    assert!(resp.results[0].record_json.contains("Hamburg"));
+
+    // 6. Filter by explicit record_ids
+    let id0 = match &inserted_val {
+        serde_json::Value::Array(arr) => arr[0]["id"].as_str().unwrap().to_string(),
+        _ => panic!("Expected array from execute_surrealql"),
+    };
+    let resp = service
+        .fact_check_entries(Request::new(FactCheckEntriesRequest {
+            table_name: "incidents".to_string(),
+            record_ids: vec![id0],
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total_checked, 1);
+    assert!(resp.results[0].record_json.contains("Berlin"));
+}
+
+#[tokio::test]
+async fn test_fact_check_entries_stream() {
+    let db = init_memory_db("fc_stream_ns", "fc_stream_db")
+        .await
+        .unwrap();
+    let app_db = Arc::new(AppDb::Local(db));
+
+    let ddl = "DEFINE TABLE alerts SCHEMAFULL; \
+               DEFINE FIELD incident_date ON TABLE alerts TYPE datetime; \
+               DEFINE FIELD status ON TABLE alerts TYPE string DEFAULT 'Pending'; \
+               DEFINE FIELD msg ON TABLE alerts TYPE string;";
+    execute_surrealql(&*app_db, ddl).await.unwrap();
+
+    let insert_sql = "INSERT INTO alerts [
+        { incident_date: <datetime>'2025-01-01T00:00:00Z', status: 'Pending', msg: 'Alert 1' },
+        { incident_date: <datetime>'2025-01-02T00:00:00Z', status: 'Pending', msg: 'Alert 2' }
+    ];";
+    execute_surrealql(&*app_db, insert_sql)
+        .await
+        .unwrap();
+
+    let config = Arc::new(AppConfig::default());
+    let service = TablePopulatorServiceImpl::new(config, app_db);
+
+    let mut stream = service
+        .fact_check_entries_stream(Request::new(FactCheckEntriesRequest {
+            table_name: "alerts".to_string(),
+            status_filter: Some("Pending".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    use tokio_stream::StreamExt;
+    let mut count = 0;
+    while let Some(res) = stream.next().await {
+        let item = res.unwrap();
+        count += 1;
+        assert!(!item.record_id.is_empty());
+        assert!(!item.record_json.is_empty());
+    }
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn test_fact_check_outcome_parsing_and_status_assignment() {
+    // 1. Confirmed verdict -> Checked
+    let raw_confirmed = r#"{
+        "verdict": "confirmed",
+        "explanation": "Incident verified through official police records.",
+        "sources": ["https://police.de/report/123"]
+    }"#;
+    let parsed = parse_json_response(raw_confirmed).unwrap();
+    let first = &parsed[0];
+    let verdict = first["verdict"].as_str().unwrap();
+    let status = if verdict == "confirmed" {
+        "Checked"
+    } else {
+        "Discarded_Irrelevant"
+    };
+    assert_eq!(verdict, "confirmed");
+    assert_eq!(status, "Checked");
+
+    // 2. Disputed verdict -> Discarded_Irrelevant
+    let raw_disputed = r#"{
+        "verdict": "disputed",
+        "explanation": "Official court statement refutes this claim as fabricated.",
+        "sources": ["https://factcheck.org/claim/456"]
+    }"#;
+    let parsed = parse_json_response(raw_disputed).unwrap();
+    let first = &parsed[0];
+    let verdict = first["verdict"].as_str().unwrap();
+    let status = if verdict == "confirmed" {
+        "Checked"
+    } else {
+        "Discarded_Irrelevant"
+    };
+    assert_eq!(verdict, "disputed");
+    assert_eq!(status, "Discarded_Irrelevant");
+
+    // 3. Unverifiable verdict -> Discarded_Irrelevant
+    let raw_unverifiable = r#"{
+        "verdict": "unverifiable",
+        "explanation": "No reputable sources found for this report.",
+        "sources": []
+    }"#;
+    let parsed = parse_json_response(raw_unverifiable).unwrap();
+    let first = &parsed[0];
+    let verdict = first["verdict"].as_str().unwrap();
+    let status = if verdict == "confirmed" {
+        "Checked"
+    } else {
+        "Discarded_Irrelevant"
+    };
+    assert_eq!(verdict, "unverifiable");
+    assert_eq!(status, "Discarded_Irrelevant");
+}
+
+#[tokio::test]
+async fn test_fact_check_db_status_update_behavior() {
+    let db = init_memory_db("fc_update_ns", "fc_update_db")
+        .await
+        .unwrap();
+    let app_db = Arc::new(AppDb::Local(db));
+
+    let ddl = "DEFINE TABLE entries SCHEMAFULL; \
+               DEFINE FIELD status ON TABLE entries TYPE string DEFAULT 'Pending'; \
+               DEFINE FIELD title ON TABLE entries TYPE string;";
+    execute_surrealql(&*app_db, ddl).await.unwrap();
+
+    let insert_sql = "INSERT INTO entries [{ title: 'Entry A', status: 'Pending' }, { title: 'Entry B', status: 'Pending' }];";
+    let inserted = execute_surrealql(&*app_db, insert_sql).await.unwrap();
+    let id_a = inserted[0]["id"].as_str().unwrap();
+    let id_b = inserted[1]["id"].as_str().unwrap();
+
+    // Update status to 'Checked' for A
+    execute_surrealql(&*app_db, &format!("UPDATE {id_a} SET status = 'Checked';"))
+        .await
+        .unwrap();
+
+    // Update status to 'Discarded_Irrelevant' for B
+    execute_surrealql(&*app_db, &format!("UPDATE {id_b} SET status = 'Discarded_Irrelevant';"))
+        .await
+        .unwrap();
+
+    // Verify status was persisted in SurrealDB
+    let q_a = execute_surrealql(&*app_db, &format!("SELECT status FROM {id_a};"))
+        .await
+        .unwrap();
+    assert_eq!(q_a[0]["status"], "Checked");
+
+    let q_b = execute_surrealql(&*app_db, &format!("SELECT status FROM {id_b};"))
+        .await
+        .unwrap();
+    assert_eq!(q_b[0]["status"], "Discarded_Irrelevant");
+}
+
