@@ -34,8 +34,8 @@ query = "Find all homecides in Berlin at January 2014. With the source."
 [db]
 # Endpoint: "mem://" for in-memory embedded DB, or "ws://localhost:8000" / "http://localhost:8000"
 endpoint = "wss://app.ux-ti.com/rpc"
-namespace = "ai"
-database = "data"
+namespace = "data"
+database = "ai"
 username = "ai"
 #password = ""
 
