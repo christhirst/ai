@@ -3,6 +3,7 @@ pub mod client;
 pub mod extractor;
 pub mod file_attachment;
 pub mod intervals;
+pub mod s3_fetcher;
 pub mod service;
 
 pub mod pb {
@@ -22,6 +23,7 @@ pub use intervals::{
 };
 pub use pb::table_populator_service_server::{TablePopulatorService, TablePopulatorServiceServer};
 pub use pb::*;
+pub use s3_fetcher::{fetch_s3_documents, parse_s3_uri};
 pub use service::{TablePopulatorServiceImpl, sanitize_and_map_records};
 
 use crate::config::AppConfig;

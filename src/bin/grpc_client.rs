@@ -57,13 +57,17 @@ struct Cli {
     #[arg(long = "provider")]
     provider: Option<String>,
 
-    /// Optional file path (e.g. PDF, CSV, TXT) to upload and populate table from
-    #[arg(short = 'f', long = "file")]
-    file: Option<String>,
+    /// S3 connection name configured in config.toml (e.g. "default", "archive")
+    #[arg(long = "s3-connection")]
+    s3_connection: Option<String>,
 
-    /// Optional MIME type override (e.g. "application/pdf", "text/csv")
-    #[arg(long = "mime-type")]
-    mime_type: Option<String>,
+    /// S3 URIs (e.g. "s3://my-bucket/reports/2026-10-18.csv") or object keys to fetch and populate table from
+    #[arg(short = 'f', long = "file")]
+    files: Vec<String>,
+
+    /// Optional fallback S3 bucket override
+    #[arg(long = "s3-bucket")]
+    s3_bucket: Option<String>,
 
     /// Optional provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan)
     #[arg(long = "base-url")]
@@ -192,24 +196,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Default operation: PopulateTable
     let table = cli.table.unwrap_or_else(|| "homecides".to_string());
 
-    let (file_data, file_name) = if let Some(ref path_str) = cli.file {
-        let path = std::path::Path::new(path_str);
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("document")
-            .to_string();
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("Failed to read file '{path_str}': {e}"))?;
-        (Some(bytes), Some(name))
-    } else {
-        (None, None)
-    };
-
+    let has_files = !cli.files.is_empty();
     let prompt = cli
         .prompt
         .unwrap_or_else(|| {
-            if file_data.is_some() {
+            if has_files {
                 String::new()
             } else {
                 config.prompt_typed.query.clone()
@@ -291,6 +282,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 thinking_level: cli.thinking_level.clone(),
                 provider: cli.provider,
                 base_url: cli.base_url.clone(),
+                s3_connection: cli.s3_connection.clone(),
+                file_names: cli.files.clone(),
+                s3_bucket: cli.s3_bucket.clone(),
             })
             .await?
             .into_inner();
@@ -341,8 +335,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ddl) = &cli.ddl {
         println!("Provided DDL: {}", ddl);
     }
-    if let Some(ref f) = cli.file {
-        println!("Attached File: {}", f);
+    if has_files {
+        if let Some(ref conn) = cli.s3_connection {
+            println!("S3 Connection: {}", conn);
+        }
+        if let Some(ref b) = cli.s3_bucket {
+            println!("S3 Bucket: {}", b);
+        }
+        println!("S3 Files ({}): {:?}", cli.files.len(), cli.files);
     }
 
     let resp = client
@@ -355,15 +355,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             model: cli.model,
             temperature: None,
             preamble: None,
-            enable_grounding: if file_data.is_some() { None } else { Some(true) },
+            enable_grounding: if has_files { None } else { Some(true) },
             omit_fields: cli.omit_fields,
             thinking_level: cli.thinking_level,
             provider: cli.provider,
             base_url: cli.base_url,
-            file_data,
-            file_name,
-            mime_type: cli.mime_type,
-            file_path: cli.file,
+            s3_connection: cli.s3_connection,
+            file_names: cli.files,
+            s3_bucket: cli.s3_bucket,
         })
         .await?
         .into_inner();

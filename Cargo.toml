@@ -57,6 +57,7 @@ tower = { version = "0.5", features = ["util"] }
 http = "1"
 tonic-middleware = "0.4"
 async-trait = "0.1"
+rust-s3 = { version = "0.38", default-features = false, features = ["tokio-rustls-tls"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

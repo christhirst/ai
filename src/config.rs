@@ -1,5 +1,6 @@
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 // TODO: Refactor
@@ -290,6 +291,24 @@ pub struct QwenConfig {
     pub model: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+pub struct S3StorageConfig {
+    #[serde(default, alias = "url")]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub bucket: Option<String>,
+    #[serde(default, alias = "key", alias = "access_key_id")]
+    pub access_key: Option<String>,
+    #[serde(default, alias = "secret", alias = "secret_access_key")]
+    pub secret_key: Option<String>,
+    #[serde(default, alias = "token", alias = "session_token")]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub path_style: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -315,6 +334,8 @@ pub struct AppConfig {
     pub local1: Option<LocalLlmConfig>,
     #[serde(default, alias = "custom2", alias = "hosted2")]
     pub local2: Option<LocalLlmConfig>,
+    #[serde(default)]
+    pub s3: std::collections::HashMap<String, S3StorageConfig>,
     #[serde(default = "default_temperature")]
     pub temperature: Option<f64>,
     #[serde(default = "default_preamble")]
@@ -373,11 +394,32 @@ impl Default for AppConfig {
             db: DatabaseConfig::default(),
             grpc: GrpcConfig::default(),
             vault: VaultConfig::default(),
+            s3: HashMap::new(),
         }
     }
 }
 
 impl AppConfig {
+    /// Resolves an S3 storage configuration by connection name.
+    /// If connection_name is None or empty:
+    /// 1. Tries "default"
+    /// 2. If only one S3 connection is defined in config, returns that one.
+    /// 3. Returns None if no connection matches.
+    pub fn get_s3_connection(
+        &self,
+        connection_name: Option<&str>,
+    ) -> Option<(&str, &S3StorageConfig)> {
+        if let Some(name) = connection_name.filter(|n| !n.trim().is_empty()) {
+            self.s3.get_key_value(name).map(|(k, v)| (k.as_str(), v))
+        } else if let Some((k, v)) = self.s3.get_key_value("default") {
+            Some((k.as_str(), v))
+        } else if self.s3.len() == 1 {
+            self.s3.iter().next().map(|(k, v)| (k.as_str(), v))
+        } else {
+            None
+        }
+    }
+
     pub fn load_from_config() -> Result<Self, ConfigError> {
         let builder = Config::builder()
             .set_default("provider", "gemini")?
@@ -749,6 +791,71 @@ impl AppConfig {
             config.vault.renew_increment = Some(inc.trim().to_string());
         }
 
+        // Standard AWS / S3 environment variables populating or overriding s3["default"]
+        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL")
+            .or_else(|_| std::env::var("AWS_ENDPOINT"))
+            .or_else(|_| std::env::var("S3_ENDPOINT"))
+            .or_else(|_| std::env::var("S3_DEFAULT_ENDPOINT"))
+            && !endpoint.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.endpoint = Some(endpoint.trim().to_string());
+        }
+
+        if let Ok(region) = std::env::var("AWS_REGION")
+            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+            .or_else(|_| std::env::var("S3_REGION"))
+            .or_else(|_| std::env::var("S3_DEFAULT_REGION"))
+            && !region.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.region = Some(region.trim().to_string());
+        }
+
+        if let Ok(bucket) = std::env::var("AWS_S3_BUCKET")
+            .or_else(|_| std::env::var("S3_BUCKET"))
+            .or_else(|_| std::env::var("S3_DEFAULT_BUCKET"))
+            && !bucket.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.bucket = Some(bucket.trim().to_string());
+        }
+
+        if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID")
+            .or_else(|_| std::env::var("AWS_ACCESS_KEY"))
+            .or_else(|_| std::env::var("S3_ACCESS_KEY"))
+            .or_else(|_| std::env::var("S3_DEFAULT_ACCESS_KEY"))
+            && !key.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.access_key = Some(key.trim().to_string());
+        }
+
+        if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY")
+            .or_else(|_| std::env::var("AWS_SECRET_KEY"))
+            .or_else(|_| std::env::var("S3_SECRET_KEY"))
+            .or_else(|_| std::env::var("S3_DEFAULT_SECRET_KEY"))
+            && !secret.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.secret_key = Some(secret.trim().to_string());
+        }
+
+        if let Ok(token) = std::env::var("AWS_SESSION_TOKEN")
+            .or_else(|_| std::env::var("S3_SESSION_TOKEN"))
+            && !token.trim().is_empty()
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.session_token = Some(token.trim().to_string());
+        }
+
+        if let Ok(ps) = std::env::var("AWS_S3_PATH_STYLE")
+            .or_else(|_| std::env::var("S3_PATH_STYLE"))
+        {
+            let entry = config.s3.entry("default".to_string()).or_default();
+            entry.path_style = Some(ps.eq_ignore_ascii_case("true") || ps == "1");
+        }
+
         Ok(config)
     }
 
@@ -1039,6 +1146,63 @@ impl AppConfig {
                 self.qwen_base_url = url.trim().trim_end_matches('/').to_string();
                 count += 1;
             }
+        }
+
+        if let Some(s3_val) = secret_map.get("s3").and_then(|v| v.as_object()) {
+            let entry = self.s3.entry("default".to_string()).or_default();
+            if let Some(endpoint) = s3_val
+                .get("endpoint")
+                .or_else(|| s3_val.get("url"))
+                .and_then(|v| v.as_str())
+                && !endpoint.is_empty()
+            {
+                entry.endpoint = Some(endpoint.to_string());
+                count += 1;
+            }
+            if let Some(bucket) = s3_val.get("bucket").and_then(|v| v.as_str())
+                && !bucket.is_empty()
+            {
+                entry.bucket = Some(bucket.to_string());
+                count += 1;
+            }
+            if let Some(key) = s3_val
+                .get("access_key")
+                .or_else(|| s3_val.get("key"))
+                .and_then(|v| v.as_str())
+                && !key.is_empty()
+            {
+                entry.access_key = Some(key.to_string());
+                count += 1;
+            }
+            if let Some(secret) = s3_val
+                .get("secret_key")
+                .or_else(|| s3_val.get("secret"))
+                .and_then(|v| v.as_str())
+                && !secret.is_empty()
+            {
+                entry.secret_key = Some(secret.to_string());
+                count += 1;
+            }
+        }
+        if let Some(key) = secret_map
+            .get("s3_access_key")
+            .or_else(|| secret_map.get("s3_key"))
+            .and_then(|v| v.as_str())
+            && !key.is_empty()
+        {
+            let entry = self.s3.entry("default".to_string()).or_default();
+            entry.access_key = Some(key.to_string());
+            count += 1;
+        }
+        if let Some(secret) = secret_map
+            .get("s3_secret_key")
+            .or_else(|| secret_map.get("s3_secret"))
+            .and_then(|v| v.as_str())
+            && !secret.is_empty()
+        {
+            let entry = self.s3.entry("default".to_string()).or_default();
+            entry.secret_key = Some(secret.to_string());
+            count += 1;
         }
 
         count

@@ -217,7 +217,7 @@ impl TablePopulatorServiceImpl {
             enable_grounding,
             thinking_level,
             base_url,
-            None,
+            &[],
         )
         .await
         {
@@ -568,14 +568,33 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
-        let attachment = crate::grpc::file_attachment::prepare_document_attachment(
-            req.file_data.as_deref(),
-            req.file_path.as_deref(),
-            req.file_name.as_deref(),
-            req.mime_type.as_deref(),
-        )
-        .await
-        .map_err(|e| Status::invalid_argument(format!("Failed to process file attachment: {e}")))?;
+        let attachments = if !req.file_names.is_empty() {
+            let (conn_name, s3_cfg) = self
+                .config
+                .get_s3_connection(req.s3_connection.as_deref())
+                .ok_or_else(|| {
+                    Status::invalid_argument(format!(
+                        "S3 connection '{}' not found in configuration",
+                        req.s3_connection.as_deref().unwrap_or("default")
+                    ))
+                })?;
+
+            tracing::info!(
+                connection = %conn_name,
+                files_count = req.file_names.len(),
+                "PopulateTable: fetching documents from S3 storage"
+            );
+
+            crate::grpc::s3_fetcher::fetch_s3_documents(
+                s3_cfg,
+                req.s3_bucket.as_deref(),
+                &req.file_names,
+            )
+            .await
+            .map_err(|e| Status::invalid_argument(format!("Failed to retrieve S3 documents: {e}")))?
+        } else {
+            Vec::new()
+        };
 
         let effective_model = req.model.as_deref().unwrap_or(&self.config.model);
         let effective_provider = req
@@ -591,16 +610,16 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             table = %table_name,
             provider = %effective_provider,
             model = %effective_model,
-            has_attachment = attachment.is_some(),
+            has_attachments = !attachments.is_empty(),
             namespace = ?req.namespace,
             database = ?req.database,
             "Received request on server: PopulateTable"
         );
 
-        if prompt.is_empty() && attachment.is_none() {
-            tracing::warn!("PopulateTable request rejected: prompt or file attachment must be provided");
+        if prompt.is_empty() && attachments.is_empty() {
+            tracing::warn!("PopulateTable request rejected: prompt or S3 files must be provided");
             return Err(Status::invalid_argument(
-                "Either prompt or file must be provided",
+                "Either prompt or S3 file_names must be provided",
             ));
         }
         if table_name.is_empty() {
@@ -609,7 +628,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         }
 
         let effective_prompt = if prompt.is_empty() {
-            "Extract all relevant records matching the table schema from the provided document."
+            "Extract all relevant records matching the table schema from the attached S3 document(s)."
                 .to_string()
         } else {
             prompt.clone()
@@ -634,12 +653,17 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         }
 
         // 2. Set the prompt / provenance as the table COMMENT
-        let comment_str = if let Some(ref att) = attachment {
-            let fname = att.filename().unwrap_or("attachment");
+        let comment_str = if !attachments.is_empty() {
+            let files_summary = attachments
+                .iter()
+                .filter_map(|a| a.filename())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let conn = req.s3_connection.as_deref().unwrap_or("default");
             if prompt.is_empty() {
-                format!("Extracted from file '{fname}'")
+                format!("Extracted from S3 [{conn}]: {files_summary}")
             } else {
-                format!("{prompt} [Source file: {fname}]")
+                format!("{prompt} [Source: S3 ({conn}) {files_summary}]")
             }
         } else {
             prompt.clone()
@@ -705,14 +729,14 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         };
 
         // 4. Extract structured data using Rig / Gemini / Qwen / Local1 / Local2
-        // Grounding defaults to false if an attachment was sent (unless explicitly requested), else true
-        let enable_grounding = req.enable_grounding.unwrap_or(attachment.is_none());
+        // Grounding defaults to false if S3 attachments were provided (unless explicitly requested), else true
+        let enable_grounding = req.enable_grounding.unwrap_or(attachments.is_empty());
         tracing::info!(
             table = %table_name,
             provider = %effective_provider,
             model = %effective_model,
             grounding = enable_grounding,
-            has_attachment = attachment.is_some(),
+            has_attachments = !attachments.is_empty(),
             "PopulateTable-Agent starting data extraction"
         );
         let records = match extract_table_data(
@@ -727,7 +751,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             enable_grounding,
             req.thinking_level.as_deref(),
             req.base_url.as_deref(),
-            attachment,
+            &attachments,
         )
         .await
         {

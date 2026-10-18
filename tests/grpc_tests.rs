@@ -332,15 +332,14 @@ async fn test_populate_table_request_receipt_and_validation() {
             thinking_level: None,
             provider: None,
             base_url: None,
-            file_data: None,
-            file_name: None,
-            mime_type: None,
-            file_path: None,
+            s3_connection: None,
+            file_names: Vec::new(),
+            s3_bucket: None,
         }))
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert_eq!(err.message(), "Either prompt or file must be provided");
+    assert_eq!(err.message(), "Either prompt or S3 file_names must be provided");
 
     // Empty table name validation failure after receiving request
     let err = service
@@ -358,10 +357,9 @@ async fn test_populate_table_request_receipt_and_validation() {
             thinking_level: None,
             provider: None,
             base_url: None,
-            file_data: None,
-            file_name: None,
-            mime_type: None,
-            file_path: None,
+            s3_connection: None,
+            file_names: Vec::new(),
+            s3_bucket: None,
         }))
         .await
         .unwrap_err();
@@ -613,6 +611,9 @@ async fn test_populate_table_interval_validation_and_stepping() {
             thinking_level: None,
             provider: None,
             base_url: None,
+            s3_connection: None,
+            file_names: Vec::new(),
+            s3_bucket: None,
         }))
         .await
         .unwrap_err();
@@ -638,6 +639,9 @@ async fn test_populate_table_interval_validation_and_stepping() {
             thinking_level: None,
             provider: None,
             base_url: None,
+            s3_connection: None,
+            file_names: Vec::new(),
+            s3_bucket: None,
         }))
         .await
         .unwrap_err();
@@ -683,7 +687,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         true,
         Some("low"),
         None,
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -706,7 +710,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         true,
         Some("ultra_high"),
         None,
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -729,7 +733,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         None,
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -749,7 +753,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         Some("https://coding.dashscope.aliyuncs.com/v1"),
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -769,7 +773,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         None,
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -792,7 +796,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         None,
-        None,
+        &[],
     )
     .await;
     assert!(res.is_err());
@@ -1672,10 +1676,9 @@ async fn test_grpc_populate_table_empty_prompt_allowed_with_attachment() {
 
     let service = TablePopulatorServiceImpl::new(config, app_db);
 
-    // Prompt is empty, but file_data is present!
-    // It should NOT fail with "Prompt must not be empty".
-    // It will proceed to extraction (which will fail with API key missing for gemini, proving validation passed).
-    let pdf_bytes = b"%PDF-1.5 test document".to_vec();
+    // Prompt is empty, but file_names is present!
+    // It should NOT fail with "Either prompt or S3 file_names must be provided".
+    // When S3 connection is not configured, it will fail with S3 connection error, proving prompt validation passed.
     let err = service
         .populate_table(Request::new(PopulateTableRequest {
             prompt: "".to_string(),
@@ -1691,24 +1694,145 @@ async fn test_grpc_populate_table_empty_prompt_allowed_with_attachment() {
             thinking_level: None,
             provider: None,
             base_url: None,
-            file_data: Some(pdf_bytes),
-            file_name: Some("test.pdf".to_string()),
-            mime_type: Some("application/pdf".to_string()),
-            file_path: None,
+            s3_connection: None,
+            file_names: vec!["s3://mock-bucket/reports/2026.csv".to_string()],
+            s3_bucket: None,
         }))
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        !err.message().contains("Prompt must not be empty"),
-        "Validation must not reject empty prompt when file is attached. Error was: {}",
+        !err.message().contains("Either prompt or S3 file_names must be provided"),
+        "Validation must not reject empty prompt when S3 files are specified. Error was: {}",
         err.message()
     );
     assert!(
-        err.message().contains("Gemini API key is not configured"),
-        "Expected API key error, got: {}",
+        err.message().contains("S3 connection 'default' not found in configuration"),
+        "Expected S3 connection missing error, got: {}",
         err.message()
     );
+}
+
+#[test]
+fn test_parse_s3_uri_scenarios() {
+    use ai::grpc::parse_s3_uri;
+
+    // 1. Full s3:// URI with bucket and nested key
+    let (bucket, key) = parse_s3_uri("s3://my-bucket/reports/2026-10-18.csv", None)
+        .expect("Valid s3 URI should parse");
+    assert_eq!(bucket, "my-bucket");
+    assert_eq!(key, "reports/2026-10-18.csv");
+
+    // 2. Full s3:// URI overriding default_bucket
+    let (bucket, key) = parse_s3_uri("s3://custom-bucket/file.pdf", Some("default-bucket"))
+        .expect("Full URI overrides default bucket");
+    assert_eq!(bucket, "custom-bucket");
+    assert_eq!(key, "file.pdf");
+
+    // 3. Bare object key with default_bucket provided
+    let (bucket, key) = parse_s3_uri("reports/annual.txt", Some("my-default-bucket"))
+        .expect("Bare key with default bucket should parse");
+    assert_eq!(bucket, "my-default-bucket");
+    assert_eq!(key, "reports/annual.txt");
+
+    // 4. Bare key with leading slash
+    let (bucket, key) = parse_s3_uri("/nested/path/data.json", Some("my-default-bucket"))
+        .expect("Bare key with leading slash should be stripped");
+    assert_eq!(bucket, "my-default-bucket");
+    assert_eq!(key, "nested/path/data.json");
+
+    // 5. Bare key without default_bucket should fail
+    let err = parse_s3_uri("reports/annual.txt", None).unwrap_err();
+    assert!(
+        err.to_string().contains("Cannot resolve S3 bucket"),
+        "Expected missing bucket error, got: {err}"
+    );
+
+    // 6. Invalid s3:// URI without key
+    let err = parse_s3_uri("s3://only-bucket", None).unwrap_err();
+    assert!(
+        err.to_string().contains("expected format 's3://<bucket>/<key>'"),
+        "Expected invalid URI error, got: {err}"
+    );
+
+    // 7. Invalid s3:// URI with empty bucket
+    let err = parse_s3_uri("s3:///some-key", None).unwrap_err();
+    assert!(
+        err.to_string().contains("expected format 's3://<bucket>/<key>'"),
+        "Expected invalid URI error, got: {err}"
+    );
+}
+
+#[test]
+fn test_s3_config_resolution_and_toml_deserialization() {
+    use ai::config::{AppConfig, S3StorageConfig};
+    use std::collections::HashMap;
+
+    let toml_str = r#"
+        model = "gemini-3.7-flash"
+        provider = "gemini"
+
+        [s3.default]
+        endpoint = "http://localhost:9000"
+        region = "us-east-1"
+        bucket = "main-bucket"
+        access_key = "minioadmin"
+        secret_key = "minioadmin"
+        path_style = true
+
+        [s3.archive]
+        endpoint = "https://s3.eu-central-1.amazonaws.com"
+        region = "eu-central-1"
+        bucket = "archive-bucket"
+        access_key = "AKIAEXAMPLE"
+        secret_key = "secretEXAMPLE"
+        path_style = false
+    "#;
+
+    let config: AppConfig = config::Config::builder()
+        .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+        .build()
+        .expect("Failed to build config")
+        .try_deserialize()
+        .expect("Failed to deserialize S3 config");
+    assert_eq!(config.s3.len(), 2);
+
+    // Explicit lookup by name
+    let (name, s3_cfg) = config.get_s3_connection(Some("archive")).expect("Archive should exist");
+    assert_eq!(name, "archive");
+    assert_eq!(s3_cfg.bucket.as_deref(), Some("archive-bucket"));
+    assert_eq!(s3_cfg.region.as_deref(), Some("eu-central-1"));
+    assert_eq!(s3_cfg.path_style, Some(false));
+
+    // Default lookup when None is specified
+    let (name, s3_cfg) = config.get_s3_connection(None).expect("Default connection should resolve");
+    assert_eq!(name, "default");
+    assert_eq!(s3_cfg.bucket.as_deref(), Some("main-bucket"));
+    assert_eq!(s3_cfg.path_style, Some(true));
+
+    // Unknown connection lookup
+    assert!(config.get_s3_connection(Some("nonexistent")).is_none());
+
+    // Fallback when only single connection exists under another name
+    let mut single_map = HashMap::new();
+    single_map.insert(
+        "custom_storage".to_string(),
+        S3StorageConfig {
+            endpoint: Some("http://minio:9000".to_string()),
+            region: None,
+            bucket: Some("mybkt".to_string()),
+            access_key: None,
+            secret_key: None,
+            session_token: None,
+            path_style: Some(true),
+        },
+    );
+    let single_config = AppConfig {
+        s3: single_map,
+        ..Default::default()
+    };
+    let (name, _) = single_config.get_s3_connection(None).expect("Single entry fallback");
+    assert_eq!(name, "custom_storage");
 }
 

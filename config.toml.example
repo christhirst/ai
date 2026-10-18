@@ -38,6 +38,24 @@ qwen_model = "qwen-plus"
 # model = "mistralai/Mistral-Small-24B-Instruct-2501"
 # api_key = "optional_api_key_or_none"
 
+# S3 Storage Connections (e.g. MinIO, Ceph, Wasabi, Cloudflare R2, AWS S3)
+# Allows PopulateTable to download documents by S3 URI (e.g. s3://my-bucket/reports/2026-10-18.csv)
+# [s3.default]
+# endpoint = "https://s3.eu-central-1.amazonaws.com" # Or custom endpoint: "http://minio.corp:9000"
+# region = "eu-central-1"
+# bucket = "my-company-documents"
+# access_key = "YOUR_ACCESS_KEY"
+# secret_key = "YOUR_SECRET_KEY"
+# path_style = false # true for MinIO/Ceph/corporate self-hosted S3
+
+# [s3.archive]
+# endpoint = "http://internal-storage.corp:9000"
+# region = "us-east-1"
+# bucket = "reports-archive"
+# access_key = "minioadmin"
+# secret_key = "minioadmin"
+# path_style = true
+
 # Model temperature (0.0 to 2.0)
 temperature = 0.0
 

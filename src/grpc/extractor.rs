@@ -9,30 +9,55 @@ use serde_json::json;
 async fn dispatch_agent_prompt<M>(
     agent: &rig::agent::Agent<M>,
     prompt: &str,
-    attachment: &Option<DocumentAttachment>,
+    attachments: &[DocumentAttachment],
 ) -> Result<String, Box<dyn std::error::Error>>
 where
     M: rig::completion::CompletionModel + 'static,
 {
-    if let Some(DocumentAttachment::Pdf { base64_data, .. }) = attachment {
-        let doc = Document {
-            data: DocumentSourceKind::Base64(base64_data.clone()),
-            media_type: Some(DocumentMediaType::PDF),
-            additional_params: None,
-        };
-        let user_content = rig::OneOrMany::many(vec![
-            UserContent::text(prompt.to_string()),
-            UserContent::Document(doc),
-        ])
-        .map_err(|e| format!("Failed to build user content: {e}"))?;
+    if attachments.is_empty() {
+        let response = agent.prompt(prompt.to_string()).await?;
+        return Ok(response);
+    }
+
+    // 1. Combine text attachments into prompt
+    let mut combined_prompt = prompt.to_string();
+    for att in attachments {
+        if let DocumentAttachment::Text { content, filename } = att {
+            let fname = filename.as_deref().unwrap_or("document");
+            combined_prompt.push_str(&format!(
+                "\n\n--- Document: {fname} ---\n{content}\n--- End Document ---\n"
+            ));
+        }
+    }
+
+    // 2. Collect any multimodal PDF documents
+    let pdf_docs: Vec<Document> = attachments
+        .iter()
+        .filter_map(|att| match att {
+            DocumentAttachment::Pdf { base64_data, .. } => Some(Document {
+                data: DocumentSourceKind::Base64(base64_data.clone()),
+                media_type: Some(DocumentMediaType::PDF),
+                additional_params: None,
+            }),
+            _ => None,
+        })
+        .collect();
+
+    if pdf_docs.is_empty() {
+        let response = agent.prompt(combined_prompt).await?;
+        Ok(response)
+    } else {
+        let mut user_parts = vec![UserContent::text(combined_prompt)];
+        for doc in pdf_docs {
+            user_parts.push(UserContent::Document(doc));
+        }
+        let user_content = rig::OneOrMany::many(user_parts)
+            .map_err(|e| format!("Failed to build user content: {e}"))?;
 
         let message = Message::User {
             content: user_content,
         };
         let response = agent.prompt(message).await?;
-        Ok(response)
-    } else {
-        let response = agent.prompt(prompt.to_string()).await?;
         Ok(response)
     }
 }
@@ -51,7 +76,7 @@ pub async fn extract_table_data(
     enable_grounding: bool,
     thinking_level_override: Option<&str>,
     base_url_override: Option<&str>,
-    attachment: Option<DocumentAttachment>,
+    attachments: &[DocumentAttachment],
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let provider = match provider_override {
         Some(p) if !p.trim().is_empty() => p
@@ -84,24 +109,31 @@ pub async fn extract_table_data(
         },
     };
 
-    // If a text attachment is provided, incorporate its decoded UTF-8 contents into the prompt
-    let effective_prompt = if let Some(DocumentAttachment::Text {
-        content,
-        filename,
-    }) = &attachment
-    {
-        let file_label = filename
-            .as_deref()
-            .map(|n| format!(" (from file '{n}')"))
-            .unwrap_or_default();
-        format!(
-            "DOCUMENT CONTENT{file_label}:\n\
-            ====================\n\
-            {content}\n\
-            ====================\n\n\
-            EXTRACTION INSTRUCTION:\n\
-            {prompt}"
-        )
+    // If text attachments are provided, incorporate their decoded UTF-8 contents into the prompt
+    let effective_prompt = if !attachments.is_empty() {
+        let mut text_parts = Vec::new();
+        for att in attachments {
+            if let DocumentAttachment::Text { content, filename } = att {
+                let file_label = filename
+                    .as_deref()
+                    .map(|n| format!(" (from file '{n}')"))
+                    .unwrap_or_default();
+                text_parts.push(format!(
+                    "DOCUMENT CONTENT{file_label}:\n\
+                    ====================\n\
+                    {content}\n\
+                    ===================="
+                ));
+            }
+        }
+        if text_parts.is_empty() {
+            prompt.to_string()
+        } else {
+            format!(
+                "{}\n\nEXTRACTION INSTRUCTION:\n{prompt}",
+                text_parts.join("\n\n")
+            )
+        }
     } else {
         prompt.to_string()
     };
@@ -206,11 +238,11 @@ pub async fn extract_table_data(
                 provider = "gemini",
                 model = %model,
                 table = %table_name,
-                has_attachment = attachment.is_some(),
+                has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
             );
 
-            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
+            dispatch_agent_prompt(&agent, &effective_prompt, attachments).await?
         }
         ModelProvider::Qwen => {
             if config.qwen_api_key.trim().is_empty() {
@@ -255,11 +287,11 @@ pub async fn extract_table_data(
                 base_url = %effective_base_url,
                 table = %table_name,
                 grounding = enable_grounding,
-                has_attachment = attachment.is_some(),
+                has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from Qwen agent"
             );
 
-            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
+            dispatch_agent_prompt(&agent, &effective_prompt, attachments).await?
         }
         ModelProvider::Local1 | ModelProvider::Local2 => {
             let local_cfg = match provider {
@@ -310,11 +342,11 @@ pub async fn extract_table_data(
                 model = %model,
                 base_url = %effective_base_url,
                 table = %table_name,
-                has_attachment = attachment.is_some(),
+                has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from local agent"
             );
 
-            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
+            dispatch_agent_prompt(&agent, &effective_prompt, attachments).await?
         }
     };
 

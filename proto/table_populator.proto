@@ -59,14 +59,13 @@ message PopulateTableRequest {
   optional string provider = 12;
   // Optional LLM provider base URL override (e.g. for Qwen, or local1/local2 hosted LLM endpoint: "http://my-llm:8000/v1")
   optional string base_url = 13;
-  // Optional binary content of a file (e.g. PDF, CSV, TXT, JSON) to extract records from
-  optional bytes file_data = 14;
-  // Optional original filename of the uploaded file (e.g. "report.pdf")
-  optional string file_name = 15;
-  // Optional MIME type (e.g. "application/pdf", "text/plain", "text/csv")
-  optional string mime_type = 16;
-  // Optional local file path on the server filesystem
-  optional string file_path = 17;
+  // Named S3 storage connection to use (matches a [s3.<name>] block in config.toml, e.g. "default", "archive").
+  // If omitted, defaults to "default" if configured, or the single configured S3 storage.
+  optional string s3_connection = 14;
+  // Full S3 URIs (e.g. "s3://my-bucket/reports/2026-10-18.csv") or object keys to fetch from S3 and supply to the model.
+  repeated string file_names = 15;
+  // Optional fallback S3 bucket name (used when file_names contains bare object keys instead of full s3:// URIs)
+  optional string s3_bucket = 16;
 }
 
 message PopulateTableResponse {
@@ -149,6 +148,12 @@ message PopulateTableIntervalRequest {
   optional string provider = 15;
   // Optional LLM provider base URL override (e.g. for Qwen, or local1/local2 hosted LLM endpoint: "http://my-llm:8000/v1")
   optional string base_url = 16;
+  // Optional named S3 storage connection to use
+  optional string s3_connection = 17;
+  // Full S3 URIs (e.g. "s3://my-bucket/reports/2026-10-18.csv") or object keys to fetch from S3
+  repeated string file_names = 18;
+  // Optional fallback S3 bucket name
+  optional string s3_bucket = 19;
 }
 
 message IntervalIterationResult {
