@@ -1,9 +1,43 @@
 use crate::config::{AppConfig, ModelProvider};
+use crate::grpc::file_attachment::DocumentAttachment;
+use rig::completion::message::{Document, DocumentMediaType, DocumentSourceKind, UserContent};
+use rig::completion::Message;
 use rig::prelude::*;
 use rig::providers::{gemini, openai};
 use serde_json::json;
 
-/// Extracts structured data from Gemini / Qwen / Rig conforming to the given table schema.
+async fn dispatch_agent_prompt<M>(
+    agent: &rig::agent::Agent<M>,
+    prompt: &str,
+    attachment: &Option<DocumentAttachment>,
+) -> Result<String, Box<dyn std::error::Error>>
+where
+    M: rig::completion::CompletionModel + 'static,
+{
+    if let Some(DocumentAttachment::Pdf { base64_data, .. }) = attachment {
+        let doc = Document {
+            data: DocumentSourceKind::Base64(base64_data.clone()),
+            media_type: Some(DocumentMediaType::PDF),
+            additional_params: None,
+        };
+        let user_content = rig::OneOrMany::many(vec![
+            UserContent::text(prompt.to_string()),
+            UserContent::Document(doc),
+        ])
+        .map_err(|e| format!("Failed to build user content: {e}"))?;
+
+        let message = Message::User {
+            content: user_content,
+        };
+        let response = agent.prompt(message).await?;
+        Ok(response)
+    } else {
+        let response = agent.prompt(prompt.to_string()).await?;
+        Ok(response)
+    }
+}
+
+/// Extracts structured data from Gemini / Qwen / Local1 / Local2 conforming to the given table schema.
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_table_data(
     config: &AppConfig,
@@ -17,6 +51,7 @@ pub async fn extract_table_data(
     enable_grounding: bool,
     thinking_level_override: Option<&str>,
     base_url_override: Option<&str>,
+    attachment: Option<DocumentAttachment>,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let provider = match provider_override {
         Some(p) if !p.trim().is_empty() => p
@@ -26,17 +61,49 @@ pub async fn extract_table_data(
     };
 
     let model = match model_override.filter(|m| !m.trim().is_empty()) {
-        Some(m) => m,
+        Some(m) => m.to_string(),
         None => match provider {
-            ModelProvider::Gemini => &config.model,
+            ModelProvider::Gemini => config.model.clone(),
             ModelProvider::Qwen => {
                 if config.model.contains("gemini") {
-                    &config.qwen_model
+                    config.qwen_model.clone()
                 } else {
-                    &config.model
+                    config.model.clone()
                 }
             }
+            ModelProvider::Local1 => config
+                .local1
+                .as_ref()
+                .and_then(|c| c.model.clone())
+                .unwrap_or_else(|| "default".to_string()),
+            ModelProvider::Local2 => config
+                .local2
+                .as_ref()
+                .and_then(|c| c.model.clone())
+                .unwrap_or_else(|| "default".to_string()),
         },
+    };
+
+    // If a text attachment is provided, incorporate its decoded UTF-8 contents into the prompt
+    let effective_prompt = if let Some(DocumentAttachment::Text {
+        content,
+        filename,
+    }) = &attachment
+    {
+        let file_label = filename
+            .as_deref()
+            .map(|n| format!(" (from file '{n}')"))
+            .unwrap_or_default();
+        format!(
+            "DOCUMENT CONTENT{file_label}:\n\
+            ====================\n\
+            {content}\n\
+            ====================\n\n\
+            EXTRACTION INSTRUCTION:\n\
+            {prompt}"
+        )
+    } else {
+        prompt.to_string()
     };
 
     // Build structured field specification and example template
@@ -76,7 +143,7 @@ pub async fn extract_table_data(
             }
 
             let client = gemini::Client::new(&config.gemini_api_key)?;
-            let mut builder = client.agent(model);
+            let mut builder = client.agent(&model);
             builder = builder.preamble(&system_instructions);
 
             // Validate thinking level if specified
@@ -139,10 +206,11 @@ pub async fn extract_table_data(
                 provider = "gemini",
                 model = %model,
                 table = %table_name,
+                has_attachment = attachment.is_some(),
                 "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
             );
 
-            agent.prompt(prompt).await?
+            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
         }
         ModelProvider::Qwen => {
             if config.qwen_api_key.trim().is_empty() {
@@ -159,15 +227,17 @@ pub async fn extract_table_data(
                 .base_url(effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(model);
+            let mut builder = client.agent(&model);
             builder = builder.preamble(&system_instructions);
 
+            // Web search is passed ONLY when enable_grounding is true
             if enable_grounding {
                 builder = builder.additional_params(json!({
                     "enable_search": true,
                     "search_options": {
                         "forced_search": true,
-                        "search_strategy": "max"
+                        "search_strategy": "max",
+                        "enable_source": true
                     }
                 }));
             }
@@ -184,10 +254,67 @@ pub async fn extract_table_data(
                 model = %model,
                 base_url = %effective_base_url,
                 table = %table_name,
+                grounding = enable_grounding,
+                has_attachment = attachment.is_some(),
                 "PopulateTable-Agent: requesting structured data extraction from Qwen agent"
             );
 
-            agent.prompt(prompt).await?
+            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
+        }
+        ModelProvider::Local1 | ModelProvider::Local2 => {
+            let local_cfg = match provider {
+                ModelProvider::Local1 => config.local1.as_ref(),
+                ModelProvider::Local2 => config.local2.as_ref(),
+                _ => None,
+            };
+
+            let effective_base_url = base_url_override
+                .map(|u| u.trim().trim_end_matches('/'))
+                .filter(|u| !u.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    local_cfg.and_then(|c| {
+                        c.base_url
+                            .as_deref()
+                            .map(|u| u.trim_end_matches('/').to_string())
+                    })
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Base URL is not configured for provider '{provider}'. Please specify base_url in config [{provider}] or in request."
+                    )
+                })?;
+
+            let api_key = local_cfg
+                .and_then(|c| c.api_key.as_deref())
+                .filter(|k| !k.trim().is_empty())
+                .unwrap_or("none");
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .base_url(&effective_base_url)
+                .build()?;
+
+            let mut builder = client.agent(&model);
+            builder = builder.preamble(&system_instructions);
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = %provider,
+                model = %model,
+                base_url = %effective_base_url,
+                table = %table_name,
+                has_attachment = attachment.is_some(),
+                "PopulateTable-Agent: requesting structured data extraction from local agent"
+            );
+
+            dispatch_agent_prompt(&agent, &effective_prompt, &attachment).await?
         }
     };
 
@@ -202,6 +329,7 @@ pub async fn extract_table_data(
 
     Ok(parsed_records)
 }
+
 
 /// Helper function to parse raw LLM response text into a Vec of JSON objects,
 /// handling markdown fences, whitespace, and root object wrappers.
@@ -444,16 +572,26 @@ pub async fn fact_check_record(
     };
 
     let model = match model_override.filter(|m| !m.trim().is_empty()) {
-        Some(m) => m,
+        Some(m) => m.to_string(),
         None => match provider {
-            ModelProvider::Gemini => &config.model,
+            ModelProvider::Gemini => config.model.clone(),
             ModelProvider::Qwen => {
                 if config.model.contains("gemini") {
-                    &config.qwen_model
+                    config.qwen_model.clone()
                 } else {
-                    &config.model
+                    config.model.clone()
                 }
             }
+            ModelProvider::Local1 => config
+                .local1
+                .as_ref()
+                .and_then(|c| c.model.clone())
+                .unwrap_or_else(|| "default".to_string()),
+            ModelProvider::Local2 => config
+                .local2
+                .as_ref()
+                .and_then(|c| c.model.clone())
+                .unwrap_or_else(|| "default".to_string()),
         },
     };
 
@@ -508,7 +646,7 @@ pub async fn fact_check_record(
             }
 
             let client = gemini::Client::new(&config.gemini_api_key)?;
-            let mut builder = client.agent(model);
+            let mut builder = client.agent(&model);
             builder = builder.preamble(&system_instructions);
 
             let normalized_thinking_level = match thinking_level_override
@@ -575,14 +713,15 @@ pub async fn fact_check_record(
                 .base_url(effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(model);
+            let mut builder = client.agent(&model);
             builder = builder.preamble(&system_instructions);
 
             builder = builder.additional_params(json!({
                 "enable_search": true,
                 "search_options": {
                     "forced_search": true,
-                    "search_strategy": "max"
+                    "search_strategy": "max",
+                    "enable_source": true
                 }
             }));
 
@@ -599,6 +738,60 @@ pub async fn fact_check_record(
                 base_url = %effective_base_url,
                 table = %table_name,
                 "FactCheck-Agent: requesting factual verification from Qwen agent"
+            );
+
+            agent.prompt(&prompt).await?
+        }
+        ModelProvider::Local1 | ModelProvider::Local2 => {
+            let local_cfg = match provider {
+                ModelProvider::Local1 => config.local1.as_ref(),
+                ModelProvider::Local2 => config.local2.as_ref(),
+                _ => None,
+            };
+
+            let effective_base_url = base_url_override
+                .map(|u| u.trim().trim_end_matches('/'))
+                .filter(|u| !u.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    local_cfg.and_then(|c| {
+                        c.base_url
+                            .as_deref()
+                            .map(|u| u.trim_end_matches('/').to_string())
+                    })
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Base URL is not configured for provider '{provider}'. Please specify base_url in config [{provider}] or in request."
+                    )
+                })?;
+
+            let api_key = local_cfg
+                .and_then(|c| c.api_key.as_deref())
+                .filter(|k| !k.trim().is_empty())
+                .unwrap_or("none");
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .base_url(&effective_base_url)
+                .build()?;
+
+            let mut builder = client.agent(&model);
+            builder = builder.preamble(&system_instructions);
+
+            let temp = temperature_override.or(config.temperature);
+            if let Some(t) = temp {
+                builder = builder.temperature(t);
+            }
+
+            let agent = builder.build();
+
+            tracing::info!(
+                provider = %provider,
+                model = %model,
+                base_url = %effective_base_url,
+                table = %table_name,
+                "FactCheck-Agent: requesting factual verification from local agent"
             );
 
             agent.prompt(&prompt).await?

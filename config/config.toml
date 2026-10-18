@@ -1,4 +1,4 @@
-# Default LLM Provider: "gemini" or "qwen"
+# Default LLM Provider: "gemini", "qwen", "local1", or "local2"
 provider = "gemini"
 
 # Gemini API Key (can also be set via GEMINI_API_KEY environment variable)
@@ -10,6 +10,20 @@ provider = "gemini"
 # - Coding plan endpoint: https://coding.dashscope.aliyuncs.com/v1
 qwen_base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 qwen_model = "qwen-plus"
+
+# Custom Company-Hosted LLM 1 (e.g. vLLM, Ollama, LiteLLM, TGI, LocalAI):
+# Can also be set via environment variables: LOCAL1_BASE_URL, LOCAL1_API_KEY, LOCAL1_MODEL
+# [local1]
+# base_url = "http://internal-llm1.corp:8000/v1"
+# model = "meta-llama/Llama-3.3-70B-Instruct"
+# api_key = "optional_api_key_or_none"
+
+# Custom Company-Hosted LLM 2:
+# Can also be set via environment variables: LOCAL2_BASE_URL, LOCAL2_API_KEY, LOCAL2_MODEL
+# [local2]
+# base_url = "http://internal-llm2.corp:8000/v1"
+# model = "mistralai/Mistral-Small-24B-Instruct-2501"
+# api_key = "optional_api_key_or_none"
 
 # Model selection
 model = "gemini-3.8-flash"
@@ -75,3 +89,7 @@ grpc_oauth_secret = ["outh-secret", "oauth-secret", "ai_grpc_oauth_secret"]
 gemini_api_key = ["gemini_api_key", "ai_gemini_api_key", "api_key"]
 qwen_api_key = ["qwen_api_key", "dashscope_api_key", "qwen", "dashscope", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "api_key_qwen"]
 qwen_base_url = ["qwen_base_url", "qwen_url", "dashscope_base_url", "dashscope_url"]
+# local1_api_key = ["local1_api_key", "local1_key"]
+# local1_base_url = ["local1_base_url", "local1_url"]
+# local2_api_key = ["local2_api_key", "local2_key"]
+# local2_base_url = ["local2_base_url", "local2_url"]

@@ -31,6 +31,10 @@ pub enum ModelProvider {
     #[default]
     Gemini,
     Qwen,
+    #[serde(rename = "local1", alias = "custom1", alias = "hosted1")]
+    Local1,
+    #[serde(rename = "local2", alias = "custom2", alias = "hosted2")]
+    Local2,
 }
 
 impl fmt::Display for ModelProvider {
@@ -38,6 +42,8 @@ impl fmt::Display for ModelProvider {
         match self {
             ModelProvider::Gemini => write!(f, "gemini"),
             ModelProvider::Qwen => write!(f, "qwen"),
+            ModelProvider::Local1 => write!(f, "local1"),
+            ModelProvider::Local2 => write!(f, "local2"),
         }
     }
 }
@@ -49,8 +55,14 @@ impl std::str::FromStr for ModelProvider {
         match s.trim().to_lowercase().as_str() {
             "gemini" | "google" => Ok(ModelProvider::Gemini),
             "qwen" | "dashscope" | "aliyun" | "alibaba" => Ok(ModelProvider::Qwen),
+            "local1" | "local_1" | "custom1" | "custom_1" | "hosted1" | "hosted_1" => {
+                Ok(ModelProvider::Local1)
+            }
+            "local2" | "local_2" | "custom2" | "custom_2" | "hosted2" | "hosted_2" => {
+                Ok(ModelProvider::Local2)
+            }
             other => Err(format!(
-                "Unsupported provider '{other}': only 'gemini' and 'qwen' are supported."
+                "Unsupported provider '{other}': allowed providers are 'gemini', 'qwen', 'local1', 'local2'."
             )),
         }
     }
@@ -259,6 +271,16 @@ pub use crate::vault::{
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+pub struct LocalLlmConfig {
+    #[serde(default, alias = "url")]
+    pub base_url: Option<String>,
+    #[serde(default, alias = "key")]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 pub struct QwenConfig {
     #[serde(default, alias = "url")]
     pub base_url: Option<String>,
@@ -289,6 +311,10 @@ pub struct AppConfig {
     pub qwen_model: String,
     #[serde(default)]
     pub qwen: Option<QwenConfig>,
+    #[serde(default, alias = "custom1", alias = "hosted1")]
+    pub local1: Option<LocalLlmConfig>,
+    #[serde(default, alias = "custom2", alias = "hosted2")]
+    pub local2: Option<LocalLlmConfig>,
     #[serde(default = "default_temperature")]
     pub temperature: Option<f64>,
     #[serde(default = "default_preamble")]
@@ -337,6 +363,8 @@ impl Default for AppConfig {
             model: default_model(),
             qwen_model: default_qwen_model(),
             qwen: None,
+            local1: None,
+            local2: None,
             temperature: default_temperature(),
             preamble: default_preamble(),
             variant: ExecutionVariant::default(),
@@ -444,6 +472,72 @@ impl AppConfig {
             && !qm.trim().is_empty()
         {
             config.qwen_model = qm.trim().to_string();
+        }
+
+        // Environment variable overrides for local1
+        if let Ok(url) = std::env::var("LOCAL1_BASE_URL")
+            .or_else(|_| std::env::var("APP_LOCAL1_BASE_URL"))
+            .or_else(|_| std::env::var("LOCAL1_URL"))
+            .or_else(|_| std::env::var("CUSTOM1_BASE_URL"))
+            && !url.trim().is_empty()
+        {
+            let entry = config.local1.get_or_insert_with(Default::default);
+            entry.base_url = Some(url.trim().trim_end_matches('/').to_string());
+        }
+        if let Ok(key) = std::env::var("LOCAL1_API_KEY")
+            .or_else(|_| std::env::var("APP_LOCAL1_API_KEY"))
+            .or_else(|_| std::env::var("CUSTOM1_API_KEY"))
+            && !key.trim().is_empty()
+        {
+            let entry = config.local1.get_or_insert_with(Default::default);
+            entry.api_key = Some(key.trim().to_string());
+        }
+        if let Ok(model) = std::env::var("LOCAL1_MODEL")
+            .or_else(|_| std::env::var("APP_LOCAL1_MODEL"))
+            .or_else(|_| std::env::var("CUSTOM1_MODEL"))
+            && !model.trim().is_empty()
+        {
+            let entry = config.local1.get_or_insert_with(Default::default);
+            entry.model = Some(model.trim().to_string());
+        }
+
+        // Environment variable overrides for local2
+        if let Ok(url) = std::env::var("LOCAL2_BASE_URL")
+            .or_else(|_| std::env::var("APP_LOCAL2_BASE_URL"))
+            .or_else(|_| std::env::var("LOCAL2_URL"))
+            .or_else(|_| std::env::var("CUSTOM2_BASE_URL"))
+            && !url.trim().is_empty()
+        {
+            let entry = config.local2.get_or_insert_with(Default::default);
+            entry.base_url = Some(url.trim().trim_end_matches('/').to_string());
+        }
+        if let Ok(key) = std::env::var("LOCAL2_API_KEY")
+            .or_else(|_| std::env::var("APP_LOCAL2_API_KEY"))
+            .or_else(|_| std::env::var("CUSTOM2_API_KEY"))
+            && !key.trim().is_empty()
+        {
+            let entry = config.local2.get_or_insert_with(Default::default);
+            entry.api_key = Some(key.trim().to_string());
+        }
+        if let Ok(model) = std::env::var("LOCAL2_MODEL")
+            .or_else(|_| std::env::var("APP_LOCAL2_MODEL"))
+            .or_else(|_| std::env::var("CUSTOM2_MODEL"))
+            && !model.trim().is_empty()
+        {
+            let entry = config.local2.get_or_insert_with(Default::default);
+            entry.model = Some(model.trim().to_string());
+        }
+
+        // Normalize base URLs for local1 and local2
+        if let Some(ref mut l1) = config.local1
+            && let Some(ref mut url) = l1.base_url
+        {
+            *url = url.trim().trim_end_matches('/').to_string();
+        }
+        if let Some(ref mut l2) = config.local2
+            && let Some(ref mut url) = l2.base_url
+        {
+            *url = url.trim().trim_end_matches('/').to_string();
         }
 
         if let Ok(pass) = std::env::var("SURREAL_PASS")
@@ -690,6 +784,68 @@ impl AppConfig {
 
         if let Some(url) = extract_str(&self.vault.keys.qwen_base_url) {
             self.qwen_base_url = url.trim().trim_end_matches('/').to_string();
+            count += 1;
+        }
+
+        if let Some(val) = secret_map
+            .get("local1_base_url")
+            .or_else(|| secret_map.get("custom1_base_url"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local1.get_or_insert_with(Default::default);
+            entry.base_url = Some(val.trim().trim_end_matches('/').to_string());
+            count += 1;
+        }
+        if let Some(val) = secret_map
+            .get("local1_api_key")
+            .or_else(|| secret_map.get("custom1_api_key"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local1.get_or_insert_with(Default::default);
+            entry.api_key = Some(val.trim().to_string());
+            count += 1;
+        }
+        if let Some(val) = secret_map
+            .get("local1_model")
+            .or_else(|| secret_map.get("custom1_model"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local1.get_or_insert_with(Default::default);
+            entry.model = Some(val.trim().to_string());
+            count += 1;
+        }
+
+        if let Some(val) = secret_map
+            .get("local2_base_url")
+            .or_else(|| secret_map.get("custom2_base_url"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local2.get_or_insert_with(Default::default);
+            entry.base_url = Some(val.trim().trim_end_matches('/').to_string());
+            count += 1;
+        }
+        if let Some(val) = secret_map
+            .get("local2_api_key")
+            .or_else(|| secret_map.get("custom2_api_key"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local2.get_or_insert_with(Default::default);
+            entry.api_key = Some(val.trim().to_string());
+            count += 1;
+        }
+        if let Some(val) = secret_map
+            .get("local2_model")
+            .or_else(|| secret_map.get("custom2_model"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let entry = self.local2.get_or_insert_with(Default::default);
+            entry.model = Some(val.trim().to_string());
             count += 1;
         }
 

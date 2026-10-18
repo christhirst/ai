@@ -166,7 +166,8 @@ pub async fn run(config: &AppConfig) -> Result<Vec<Homecides>, Box<dyn std::erro
                     "enable_search": true,
                     "search_options": {
                         "forced_search": true,
-                        "search_strategy": "max"
+                        "search_strategy": "max",
+                        "enable_source": true
                     }
                 }));
 
@@ -181,6 +182,86 @@ pub async fn run(config: &AppConfig) -> Result<Vec<Homecides>, Box<dyn std::erro
                 model, config.qwen_base_url
             );
             println!("Requesting structured data from Qwen...");
+
+            agent.prompt_typed(&config.prompt_typed.query).await?
+        }
+        ModelProvider::Local1 => {
+            let local_cfg = config
+                .local1
+                .as_ref()
+                .ok_or("Local1 configuration is missing in config.toml or environment variables")?;
+            let model = local_cfg
+                .model
+                .as_deref()
+                .unwrap_or(&config.model);
+            let api_key = local_cfg
+                .api_key
+                .as_deref()
+                .filter(|k| !k.trim().is_empty())
+                .unwrap_or("none");
+            let base_url = local_cfg
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:8000/v1");
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .base_url(base_url)
+                .build()?;
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            if let Some(temperature) = config.temperature {
+                builder = builder.temperature(temperature);
+            }
+
+            let agent = builder.build();
+
+            println!(
+                "Provider: local1 | Model: {} (base_url: {})",
+                model, base_url
+            );
+            println!("Requesting structured data from Local1...");
+
+            agent.prompt_typed(&config.prompt_typed.query).await?
+        }
+        ModelProvider::Local2 => {
+            let local_cfg = config
+                .local2
+                .as_ref()
+                .ok_or("Local2 configuration is missing in config.toml or environment variables")?;
+            let model = local_cfg
+                .model
+                .as_deref()
+                .unwrap_or(&config.model);
+            let api_key = local_cfg
+                .api_key
+                .as_deref()
+                .filter(|k| !k.trim().is_empty())
+                .unwrap_or("none");
+            let base_url = local_cfg
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:8000/v1");
+
+            let client = openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .base_url(base_url)
+                .build()?;
+            let mut builder = client.agent(model);
+            builder = builder.preamble(&system_instructions);
+
+            if let Some(temperature) = config.temperature {
+                builder = builder.temperature(temperature);
+            }
+
+            let agent = builder.build();
+
+            println!(
+                "Provider: local2 | Model: {} (base_url: {})",
+                model, base_url
+            );
+            println!("Requesting structured data from Local2...");
 
             agent.prompt_typed(&config.prompt_typed.query).await?
         }

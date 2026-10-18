@@ -217,6 +217,7 @@ impl TablePopulatorServiceImpl {
             enable_grounding,
             thinking_level,
             base_url,
+            None,
         )
         .await
         {
@@ -567,6 +568,15 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
+        let attachment = crate::grpc::file_attachment::prepare_document_attachment(
+            req.file_data.as_deref(),
+            req.file_path.as_deref(),
+            req.file_name.as_deref(),
+            req.mime_type.as_deref(),
+        )
+        .await
+        .map_err(|e| Status::invalid_argument(format!("Failed to process file attachment: {e}")))?;
+
         let effective_model = req.model.as_deref().unwrap_or(&self.config.model);
         let effective_provider = req
             .provider
@@ -574,24 +584,36 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             .unwrap_or(match self.config.provider {
                 crate::config::ModelProvider::Gemini => "gemini",
                 crate::config::ModelProvider::Qwen => "qwen",
+                crate::config::ModelProvider::Local1 => "local1",
+                crate::config::ModelProvider::Local2 => "local2",
             });
         tracing::info!(
             table = %table_name,
             provider = %effective_provider,
             model = %effective_model,
+            has_attachment = attachment.is_some(),
             namespace = ?req.namespace,
             database = ?req.database,
             "Received request on server: PopulateTable"
         );
 
-        if prompt.is_empty() {
-            tracing::warn!("PopulateTable request rejected: prompt must not be empty");
-            return Err(Status::invalid_argument("Prompt must not be empty"));
+        if prompt.is_empty() && attachment.is_none() {
+            tracing::warn!("PopulateTable request rejected: prompt or file attachment must be provided");
+            return Err(Status::invalid_argument(
+                "Either prompt or file must be provided",
+            ));
         }
         if table_name.is_empty() {
             tracing::warn!("PopulateTable request rejected: table name must not be empty");
             return Err(Status::invalid_argument("Table name must not be empty"));
         }
+
+        let effective_prompt = if prompt.is_empty() {
+            "Extract all relevant records matching the table schema from the provided document."
+                .to_string()
+        } else {
+            prompt.clone()
+        };
 
         let db = self
             .get_db_for_request(req.namespace.as_deref(), req.database.as_deref())
@@ -611,8 +633,18 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             }
         }
 
-        // 2. Set the prompt as the table COMMENT
-        if let Err(e) = set_table_comment(&db, &table_name, &prompt).await {
+        // 2. Set the prompt / provenance as the table COMMENT
+        let comment_str = if let Some(ref att) = attachment {
+            let fname = att.filename().unwrap_or("attachment");
+            if prompt.is_empty() {
+                format!("Extracted from file '{fname}'")
+            } else {
+                format!("{prompt} [Source file: {fname}]")
+            }
+        } else {
+            prompt.clone()
+        };
+        if let Err(e) = set_table_comment(&db, &table_name, &comment_str).await {
             tracing::warn!(table = %table_name, error = %e, "Failed to set table comment");
         }
 
@@ -623,7 +655,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 tracing::warn!(table = %table_name, error = %e, "Could not introspect table schema");
                 crate::db::TableSchemaSummary {
                     table_name: table_name.clone(),
-                    comment: prompt.clone(),
+                    comment: comment_str.clone(),
                     fields: Vec::new(),
                     field_names: Vec::new(),
                     raw_info: serde_json::Value::Null,
@@ -672,17 +704,20 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 .collect()
         };
 
-        // 4. Extract structured data using Rig / Gemini / Qwen
-        let enable_grounding = req.enable_grounding.unwrap_or(true);
+        // 4. Extract structured data using Rig / Gemini / Qwen / Local1 / Local2
+        // Grounding defaults to false if an attachment was sent (unless explicitly requested), else true
+        let enable_grounding = req.enable_grounding.unwrap_or(attachment.is_none());
         tracing::info!(
             table = %table_name,
             provider = %effective_provider,
             model = %effective_model,
+            grounding = enable_grounding,
+            has_attachment = attachment.is_some(),
             "PopulateTable-Agent starting data extraction"
         );
         let records = match extract_table_data(
             &self.config,
-            &prompt,
+            &effective_prompt,
             &table_name,
             &model_fields,
             req.provider.as_deref(),
@@ -692,6 +727,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             enable_grounding,
             req.thinking_level.as_deref(),
             req.base_url.as_deref(),
+            attachment,
         )
         .await
         {

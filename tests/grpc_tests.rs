@@ -1,4 +1,4 @@
-use ai::config::{AppConfig, DatabaseConfig, GrpcConfig};
+use ai::config::{AppConfig, DatabaseConfig, GrpcConfig, ModelProvider};
 use ai::db::{
     AppDb, execute_surrealql, get_defined_tables, get_table_schema_summary, init_memory_db,
     insert_dynamic_records, set_table_comment,
@@ -316,7 +316,7 @@ async fn test_populate_table_request_receipt_and_validation() {
 
     let service = TablePopulatorServiceImpl::new(config, app_db);
 
-    // Empty prompt validation failure after receiving request
+    // Empty prompt validation failure after receiving request (with no file)
     let err = service
         .populate_table(Request::new(PopulateTableRequest {
             prompt: "".to_string(),
@@ -332,11 +332,15 @@ async fn test_populate_table_request_receipt_and_validation() {
             thinking_level: None,
             provider: None,
             base_url: None,
+            file_data: None,
+            file_name: None,
+            mime_type: None,
+            file_path: None,
         }))
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert_eq!(err.message(), "Prompt must not be empty");
+    assert_eq!(err.message(), "Either prompt or file must be provided");
 
     // Empty table name validation failure after receiving request
     let err = service
@@ -354,6 +358,10 @@ async fn test_populate_table_request_receipt_and_validation() {
             thinking_level: None,
             provider: None,
             base_url: None,
+            file_data: None,
+            file_name: None,
+            mime_type: None,
+            file_path: None,
         }))
         .await
         .unwrap_err();
@@ -675,6 +683,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         true,
         Some("low"),
         None,
+        None,
     )
     .await;
     assert!(res.is_err());
@@ -696,6 +705,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         None,
         true,
         Some("ultra_high"),
+        None,
         None,
     )
     .await;
@@ -719,6 +729,7 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         None,
+        None,
     )
     .await;
     assert!(res.is_err());
@@ -738,11 +749,58 @@ async fn test_gemini_3_model_enforcement_and_thinking_level() {
         false,
         None,
         Some("https://coding.dashscope.aliyuncs.com/v1"),
+        None,
     )
     .await;
     assert!(res.is_err());
     let err_msg = res.unwrap_err().to_string();
     assert!(err_msg.contains("Qwen API key is not configured"));
+
+    // 5. Calling extract_table_data with Local1 without base_url must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("local1"),
+        Some("custom-model"),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Base URL is not configured for provider 'local1'"),
+        "Unexpected error message: {err_msg}"
+    );
+
+    // 6. Calling extract_table_data with Local2 without base_url must be rejected
+    let res = ai::grpc::extract_table_data(
+        &config,
+        "test prompt",
+        "dummy_table",
+        &[],
+        Some("local2"),
+        Some("custom-model-2"),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Base URL is not configured for provider 'local2'"),
+        "Unexpected error message: {err_msg}"
+    );
 }
 
 #[tokio::test]
@@ -1492,3 +1550,165 @@ async fn test_fact_check_db_status_update_behavior() {
         .unwrap();
     assert_eq!(q_b[0]["status"], "Discarded_Irrelevant");
 }
+
+#[test]
+fn test_model_provider_local_parsing_and_aliases() {
+    use std::str::FromStr;
+
+    // Local1 and aliases
+    assert_eq!(ModelProvider::from_str("local1").unwrap(), ModelProvider::Local1);
+    assert_eq!(ModelProvider::from_str("custom1").unwrap(), ModelProvider::Local1);
+    assert_eq!(ModelProvider::from_str("hosted1").unwrap(), ModelProvider::Local1);
+    assert_eq!(ModelProvider::from_str("LOCAL1").unwrap(), ModelProvider::Local1);
+
+    // Local2 and aliases
+    assert_eq!(ModelProvider::from_str("local2").unwrap(), ModelProvider::Local2);
+    assert_eq!(ModelProvider::from_str("custom2").unwrap(), ModelProvider::Local2);
+    assert_eq!(ModelProvider::from_str("hosted2").unwrap(), ModelProvider::Local2);
+    assert_eq!(ModelProvider::from_str("LOCAL2").unwrap(), ModelProvider::Local2);
+
+    // Display
+    assert_eq!(ModelProvider::Local1.to_string(), "local1");
+    assert_eq!(ModelProvider::Local2.to_string(), "local2");
+}
+
+#[tokio::test]
+async fn test_prepare_document_attachment_pdf_and_text() {
+    use ai::grpc::file_attachment::{DocumentAttachment, prepare_document_attachment};
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    // 1. PDF detection via %PDF- magic bytes
+    let pdf_bytes = b"%PDF-1.4\n1 0 obj\n<< /Title (Test) >>\nendobj".to_vec();
+    let att = prepare_document_attachment(Some(&pdf_bytes), None, Some("report.pdf"), None)
+        .await
+        .unwrap()
+        .expect("Attachment should be Some");
+
+    match att {
+        DocumentAttachment::Pdf { filename, base64_data } => {
+            assert_eq!(filename.as_deref(), Some("report.pdf"));
+            assert_eq!(base64_data, STANDARD.encode(&pdf_bytes));
+        }
+        _ => panic!("Expected DocumentAttachment::Pdf"),
+    }
+
+    // 2. Explicit mime_type application/pdf override even if no magic header
+    let raw_bytes = b"non-magic-bytes".to_vec();
+    let att = prepare_document_attachment(
+        Some(&raw_bytes),
+        None,
+        Some("doc.bin"),
+        Some("application/pdf"),
+    )
+    .await
+    .unwrap()
+    .expect("Attachment should be Some");
+    assert!(matches!(att, DocumentAttachment::Pdf { .. }));
+
+    // 3. UTF-8 text document
+    let text_bytes = b"col1,col2\nval1,val2\nval3,val4".to_vec();
+    let att = prepare_document_attachment(Some(&text_bytes), None, Some("data.csv"), None)
+        .await
+        .unwrap()
+        .expect("Attachment should be Some");
+
+    match att {
+        DocumentAttachment::Text { filename, content } => {
+            assert_eq!(filename.as_deref(), Some("data.csv"));
+            assert_eq!(content, "col1,col2\nval1,val2\nval3,val4");
+        }
+        _ => panic!("Expected DocumentAttachment::Text"),
+    }
+
+    // 4. Empty data returns None
+    let att = prepare_document_attachment(Some(&[]), None, Some("empty.txt"), None)
+        .await
+        .unwrap();
+    assert!(att.is_none());
+
+    // 5. Missing file path returns error
+    let res = prepare_document_attachment(None, Some("/nonexistent/file/path.pdf"), None, None).await;
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("Failed to read file from path"));
+
+    // 6. Loading from filesystem path
+    let temp_dir = std::env::temp_dir();
+    let test_file = temp_dir.join("test_grpc_file_attachment.txt");
+    tokio::fs::write(&test_file, b"content from disk").await.unwrap();
+
+    let att = prepare_document_attachment(None, Some(test_file.to_str().unwrap()), None, None)
+        .await
+        .unwrap()
+        .expect("Should load attachment from file path");
+
+    match att {
+        DocumentAttachment::Text { content, filename } => {
+            assert_eq!(content, "content from disk");
+            assert_eq!(filename.as_deref(), Some("test_grpc_file_attachment.txt"));
+        }
+        _ => panic!("Expected DocumentAttachment::Text"),
+    }
+
+    let _ = tokio::fs::remove_file(test_file).await;
+}
+
+#[tokio::test]
+async fn test_grpc_populate_table_empty_prompt_allowed_with_attachment() {
+    let db = init_memory_db("attachment_prompt_ns", "attachment_prompt_db")
+        .await
+        .unwrap();
+    let app_db = Arc::new(AppDb::Local(db));
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "".to_string(),
+        grpc: GrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port: 50051,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let service = TablePopulatorServiceImpl::new(config, app_db);
+
+    // Prompt is empty, but file_data is present!
+    // It should NOT fail with "Prompt must not be empty".
+    // It will proceed to extraction (which will fail with API key missing for gemini, proving validation passed).
+    let pdf_bytes = b"%PDF-1.5 test document".to_vec();
+    let err = service
+        .populate_table(Request::new(PopulateTableRequest {
+            prompt: "".to_string(),
+            table_name: "file_table".to_string(),
+            namespace: None,
+            database: None,
+            define_table_sql: None,
+            model: None,
+            temperature: None,
+            preamble: None,
+            enable_grounding: None,
+            omit_fields: Vec::new(),
+            thinking_level: None,
+            provider: None,
+            base_url: None,
+            file_data: Some(pdf_bytes),
+            file_name: Some("test.pdf".to_string()),
+            mime_type: Some("application/pdf".to_string()),
+            file_path: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Internal);
+    assert!(
+        !err.message().contains("Prompt must not be empty"),
+        "Validation must not reject empty prompt when file is attached. Error was: {}",
+        err.message()
+    );
+    assert!(
+        err.message().contains("Gemini API key is not configured"),
+        "Expected API key error, got: {}",
+        err.message()
+    );
+}
+

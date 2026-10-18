@@ -53,9 +53,17 @@ struct Cli {
     #[arg(short = 'i', long)]
     info: Option<String>,
 
-    /// Optional LLM provider override: "gemini", "qwen"
+    /// Optional LLM provider override: "gemini", "qwen", "local1", "local2"
     #[arg(long = "provider")]
     provider: Option<String>,
+
+    /// Optional file path (e.g. PDF, CSV, TXT) to upload and populate table from
+    #[arg(short = 'f', long = "file")]
+    file: Option<String>,
+
+    /// Optional MIME type override (e.g. "application/pdf", "text/csv")
+    #[arg(long = "mime-type")]
+    mime_type: Option<String>,
 
     /// Optional provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan)
     #[arg(long = "base-url")]
@@ -183,13 +191,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Default operation: PopulateTable
     let table = cli.table.unwrap_or_else(|| "homecides".to_string());
+
+    let (file_data, file_name) = if let Some(ref path_str) = cli.file {
+        let path = std::path::Path::new(path_str);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("document")
+            .to_string();
+        let bytes = std::fs::read(path)
+            .map_err(|e| format!("Failed to read file '{path_str}': {e}"))?;
+        (Some(bytes), Some(name))
+    } else {
+        (None, None)
+    };
+
     let prompt = cli
         .prompt
-        .unwrap_or_else(|| config.prompt_typed.query.clone());
+        .unwrap_or_else(|| {
+            if file_data.is_some() {
+                String::new()
+            } else {
+                config.prompt_typed.query.clone()
+            }
+        });
 
     let effective_provider = cli.provider.as_deref().unwrap_or(match config.provider {
         ai::config::ModelProvider::Gemini => "gemini",
         ai::config::ModelProvider::Qwen => "qwen",
+        ai::config::ModelProvider::Local1 => "local1",
+        ai::config::ModelProvider::Local2 => "local2",
     });
 
     let model = cli.model.as_deref().unwrap_or(match effective_provider {
@@ -200,6 +231,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &config.model
             }
         }
+        "local1" => config
+            .local1
+            .as_ref()
+            .and_then(|c| c.model.as_deref())
+            .unwrap_or(&config.model),
+        "local2" => config
+            .local2
+            .as_ref()
+            .and_then(|c| c.model.as_deref())
+            .unwrap_or(&config.model),
         _ => &config.model,
     });
 
@@ -300,6 +341,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ddl) = &cli.ddl {
         println!("Provided DDL: {}", ddl);
     }
+    if let Some(ref f) = cli.file {
+        println!("Attached File: {}", f);
+    }
 
     let resp = client
         .populate_table(PopulateTableRequest {
@@ -311,11 +355,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             model: cli.model,
             temperature: None,
             preamble: None,
-            enable_grounding: Some(true),
+            enable_grounding: if file_data.is_some() { None } else { Some(true) },
             omit_fields: cli.omit_fields,
             thinking_level: cli.thinking_level,
             provider: cli.provider,
             base_url: cli.base_url,
+            file_data,
+            file_name,
+            mime_type: cli.mime_type,
+            file_path: cli.file,
         })
         .await?
         .into_inner();

@@ -26,6 +26,18 @@ qwen_model = "qwen-plus"
 # model = "qwen-plus"
 # api_key = "YOUR_QWEN_API_KEY_HERE"
 
+# Custom Company-Hosted LLM 1 (e.g. vLLM, Ollama, LiteLLM, TGI, LocalAI):
+# [local1]
+# base_url = "http://internal-llm1.corp:8000/v1"
+# model = "meta-llama/Llama-3.3-70B-Instruct"
+# api_key = "optional_api_key_or_none"
+
+# Custom Company-Hosted LLM 2:
+# [local2]
+# base_url = "http://internal-llm2.corp:8000/v1"
+# model = "mistralai/Mistral-Small-24B-Instruct-2501"
+# api_key = "optional_api_key_or_none"
+
 # Model temperature (0.0 to 2.0)
 temperature = 0.0
 

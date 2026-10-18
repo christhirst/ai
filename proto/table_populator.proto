@@ -55,10 +55,18 @@ message PopulateTableRequest {
   repeated string omit_fields = 10;
   // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
   optional string thinking_level = 11;
-  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  // Optional LLM provider override: "gemini", "qwen", "local1", "local2" (defaults to config provider)
   optional string provider = 12;
-  // Optional LLM provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan: "https://coding.dashscope.aliyuncs.com/v1")
+  // Optional LLM provider base URL override (e.g. for Qwen, or local1/local2 hosted LLM endpoint: "http://my-llm:8000/v1")
   optional string base_url = 13;
+  // Optional binary content of a file (e.g. PDF, CSV, TXT, JSON) to extract records from
+  optional bytes file_data = 14;
+  // Optional original filename of the uploaded file (e.g. "report.pdf")
+  optional string file_name = 15;
+  // Optional MIME type (e.g. "application/pdf", "text/plain", "text/csv")
+  optional string mime_type = 16;
+  // Optional local file path on the server filesystem
+  optional string file_path = 17;
 }
 
 message PopulateTableResponse {
@@ -137,9 +145,9 @@ message PopulateTableIntervalRequest {
   repeated string omit_fields = 13;
   // Optional thinking level for reasoning-capable Gemini models: "minimal", "low", "medium", "high" (default: "low" when grounding is enabled)
   optional string thinking_level = 14;
-  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  // Optional LLM provider override: "gemini", "qwen", "local1", "local2" (defaults to config provider)
   optional string provider = 15;
-  // Optional LLM provider base URL override (e.g. for Qwen / DashScope compatible mode or coding plan: "https://coding.dashscope.aliyuncs.com/v1")
+  // Optional LLM provider base URL override (e.g. for Qwen, or local1/local2 hosted LLM endpoint: "http://my-llm:8000/v1")
   optional string base_url = 16;
 }
 
@@ -186,7 +194,7 @@ message FactCheckEntriesRequest {
   optional uint64 limit = 9;
   // Whether to update the record status in SurrealDB to "Checked" or "Discarded_Irrelevant" (default: true)
   optional bool update_db_status = 10;
-  // Optional LLM provider override: "gemini", "qwen" (defaults to config provider)
+  // Optional LLM provider override: "gemini", "qwen", "local1", "local2" (defaults to config provider)
   optional string provider = 11;
   // Optional LLM model override
   optional string model = 12;
