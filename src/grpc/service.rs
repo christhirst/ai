@@ -198,6 +198,7 @@ impl TablePopulatorServiceImpl {
         prepared: &PreparedIntervalRun,
         overrides: LlmStepOverrides<'_>,
     ) -> IntervalIterationResult {
+        let step_start = std::time::Instant::now();
         let prompt = inject_timeframe_into_prompt(template_prompt, &step.timeframe_label);
         tracing::info!(
             table = %table_name,
@@ -221,12 +222,22 @@ impl TablePopulatorServiceImpl {
         )
         .await
         {
-            Ok(r) => r,
+            Ok(r) => {
+                tracing::info!(
+                    table = %table_name,
+                    timeframe = %step.timeframe_label,
+                    extracted_count = r.len(),
+                    duration_secs = step_start.elapsed().as_secs_f64(),
+                    "PopulateTableInterval step extraction completed"
+                );
+                r
+            }
             Err(e) => {
                 tracing::error!(
                     table = %table_name,
                     timeframe = %step.timeframe_label,
                     error = %e,
+                    duration_secs = step_start.elapsed().as_secs_f64(),
                     "PopulateTableInterval step extraction failed"
                 );
                 return IntervalIterationResult {
@@ -251,6 +262,7 @@ impl TablePopulatorServiceImpl {
                         table = %table_name,
                         timeframe = %step.timeframe_label,
                         error = %e,
+                        duration_secs = step_start.elapsed().as_secs_f64(),
                         "PopulateTableInterval step insertion failed"
                     );
                     return IntervalIterationResult {
@@ -268,6 +280,14 @@ impl TablePopulatorServiceImpl {
         let records_count = inserted.len() as u64;
         let data_json =
             serde_json::to_string_pretty(&inserted).unwrap_or_else(|_| "[]".to_string());
+
+        tracing::info!(
+            table = %table_name,
+            timeframe = %step.timeframe_label,
+            inserted_count = records_count,
+            duration_secs = step_start.elapsed().as_secs_f64(),
+            "PopulateTableInterval step completed successfully"
+        );
 
         IntervalIterationResult {
             timeframe: step.timeframe_label.clone(),
@@ -992,6 +1012,18 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             } else {
                 failed_iterations += 1;
             }
+
+            tracing::info!(
+                table = %table_name,
+                step = i + 1,
+                total_steps = total_steps,
+                timeframe = %step.timeframe_label,
+                success = res.success,
+                records = res.records_count,
+                total_records_so_far = total_records_count,
+                "PopulateTableInterval step iteration finished"
+            );
+
             iterations.push(res);
         }
 
