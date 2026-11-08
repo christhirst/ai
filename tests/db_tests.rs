@@ -18,7 +18,6 @@ async fn test_db_initialization() {
         .expect("Failed to init in-memory database");
 
     let config = DatabaseConfig {
-        // TODO: Refactor
         endpoint: "mem://".to_string(),
         namespace: "test_custom_ns".to_string(),
         database: "test_custom_db".to_string(),
@@ -500,4 +499,13 @@ async fn test_vault_token_renewer_spawns_and_cancels() {
     renewer.stop();
     let res = renewer.wait_for_completion().await;
     assert!(res.is_ok());
+}
+
+#[test]
+fn test_escape_surreal_str() {
+    assert_eq!(
+        ai::db::escape_surreal_str("O'Brien\\test"),
+        "O\\'Brien\\\\test"
+    );
+    assert_eq!(ai::db::escape_surreal_str("plain"), "plain");
 }

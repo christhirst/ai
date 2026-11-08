@@ -40,9 +40,9 @@ pub async fn prepare_document_attachment(
         let trimmed = path_str.trim();
         if !trimmed.is_empty() {
             let path = Path::new(trimmed);
-            let bytes = tokio::fs::read(path).await.map_err(|e| {
-                format!("Failed to read file from path '{trimmed}': {e}")
-            })?;
+            let bytes = tokio::fs::read(path)
+                .await
+                .map_err(|e| format!("Failed to read file from path '{trimmed}': {e}"))?;
             Some(bytes)
         } else {
             None
@@ -89,9 +89,9 @@ pub async fn prepare_document_attachment(
         }))
     } else {
         // Plain text, Markdown, CSV, TSV, JSON, etc.
-        let content = match String::from_utf8(bytes.clone()) {
+        let content = match String::from_utf8(bytes) {
             Ok(s) => s,
-            Err(_) => String::from_utf8_lossy(&bytes).to_string(),
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
         };
 
         if content.trim().is_empty() {

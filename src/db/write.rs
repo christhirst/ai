@@ -1,6 +1,14 @@
-use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES};
+use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES, escape_surreal_str};
 use crate::prompt_typed::{GdpRecord, Homecides};
+use std::sync::LazyLock;
 use surrealdb::{Connection, Surreal};
+
+static ISO_DATETIME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#""(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?)""#,
+    )
+    .expect("Valid datetime regex")
+});
 
 pub trait DbWritable {
     fn create_homecide(
@@ -88,10 +96,10 @@ impl DbWritable for AppDb {
             AppDb::Remote(remote) => {
                 let date_str = record.Date.to_string();
                 let prison_str = record.Prison_time.to_string();
-                let citiy_escaped = record.citiy.replace('\'', "\\'");
-                let citizenship_escaped = record.Citizenship.replace('\'', "\\'");
-                let weapon_escaped = record.weapon.replace('\'', "\\'");
-                let other_escaped = record.Other_sentence.replace('\'', "\\'");
+                let citiy_escaped = escape_surreal_str(&record.citiy);
+                let citizenship_escaped = escape_surreal_str(&record.Citizenship);
+                let weapon_escaped = escape_surreal_str(&record.weapon);
+                let other_escaped = escape_surreal_str(&record.Other_sentence);
 
                 let sql = format!(
                     "INSERT INTO homecides {{ citiy: '{citiy_escaped}', Citizenship: '{citizenship_escaped}', Date: <datetime>'{date_str}', weapon: '{weapon_escaped}', Prison_time: <duration>'{prison_str}', Other_sentence: '{other_escaped}' }};"
@@ -113,14 +121,14 @@ impl DbWritable for AppDb {
                 if records.is_empty() {
                     return Ok(Vec::new());
                 }
-                let mut values_ql = Vec::new();
+                let mut values_ql = Vec::with_capacity(records.len());
                 for r in records {
                     let date_str = r.Date.to_string();
                     let prison_str = r.Prison_time.to_string();
-                    let citiy_escaped = r.citiy.replace('\'', "\\'");
-                    let citizenship_escaped = r.Citizenship.replace('\'', "\\'");
-                    let weapon_escaped = r.weapon.replace('\'', "\\'");
-                    let other_escaped = r.Other_sentence.replace('\'', "\\'");
+                    let citiy_escaped = escape_surreal_str(&r.citiy);
+                    let citizenship_escaped = escape_surreal_str(&r.Citizenship);
+                    let weapon_escaped = escape_surreal_str(&r.weapon);
+                    let other_escaped = escape_surreal_str(&r.Other_sentence);
                     values_ql.push(format!(
                         "{{ citiy: '{citiy_escaped}', Citizenship: '{citizenship_escaped}', Date: <datetime>'{date_str}', weapon: '{weapon_escaped}', Prison_time: <duration>'{prison_str}', Other_sentence: '{other_escaped}' }}"
                     ));
@@ -140,9 +148,10 @@ impl DbWritable for AppDb {
         match self {
             AppDb::Local(local) => local.create_gdp(record).await,
             AppDb::Remote(remote) => {
+                let year_escaped = escape_surreal_str(&record.year);
                 let sql = format!(
-                    "INSERT INTO gdp_record {{ year: '{}', gdp: {} }};",
-                    record.year, record.gdp
+                    "INSERT INTO gdp_record {{ year: '{year_escaped}', gdp: {} }};",
+                    record.gdp
                 );
                 let res = remote.query_raw(&sql).await?;
                 let items: Vec<GdpRecord> = serde_json::from_value(res)?;
@@ -158,9 +167,10 @@ impl DbWritable for AppDb {
         match self {
             AppDb::Local(local) => local.create_gdps(records).await,
             AppDb::Remote(remote) => {
-                let mut values_ql = Vec::new();
+                let mut values_ql = Vec::with_capacity(records.len());
                 for r in records {
-                    values_ql.push(format!("{{ year: '{}', gdp: {} }}", r.year, r.gdp));
+                    let year_escaped = escape_surreal_str(&r.year);
+                    values_ql.push(format!("{{ year: '{year_escaped}', gdp: {} }}", r.gdp));
                 }
                 let sql = format!("INSERT INTO gdp_record [{}];", values_ql.join(", "));
                 let res = remote.query_raw(&sql).await?;
@@ -197,11 +207,9 @@ impl DbWritable for AppDb {
 /// Coerces ISO-8601 datetime strings into SurrealQL `<datetime>'...'` literals
 /// so SCHEMAFULL `TYPE datetime` fields are properly coerced instead of rejected as string.
 pub fn coerce_surrealql_literals(json_str: &str) -> String {
-    let re = regex::Regex::new(
-        r#""(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?)""#,
-    )
-    .expect("Valid datetime regex");
-    re.replace_all(json_str, "<datetime>'$1'").to_string()
+    ISO_DATETIME_RE
+        .replace_all(json_str, "<datetime>'$1'")
+        .to_string()
 }
 
 /// Recursively removes null values from JSON objects so SurrealDB treats them as NONE (absent)

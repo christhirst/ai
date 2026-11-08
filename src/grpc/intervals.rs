@@ -1,5 +1,17 @@
 use chrono::{Datelike, Days, Months, NaiveDate};
 use regex::Regex;
+use std::sync::LazyLock;
+
+static YEAR_MONTH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d{4})-(\d{1,2})$").expect("Valid year-month regex"));
+static YEAR_ONLY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d{4})$").expect("Valid year regex"));
+static TIMEFRAME_QUOTED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?im)^(\s*-?\s*timeframe\s*:\s*)"[^"]*""#).expect("Valid quoted timeframe regex")
+});
+static TIMEFRAME_UNQUOTED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^(\s*-?\s*timeframe\s*:\s*)[^\r\n]+").expect("Valid unquoted timeframe regex")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntervalType {
@@ -44,8 +56,7 @@ pub fn parse_flexible_date(raw: &str, is_end: bool) -> Result<NaiveDate, String>
     }
 
     // Check YYYY-MM
-    let ym_re = Regex::new(r"^(\d{4})-(\d{1,2})$").map_err(|e| e.to_string())?;
-    if let Some(caps) = ym_re.captures(s) {
+    if let Some(caps) = YEAR_MONTH_RE.captures(s) {
         let year: i32 = caps[1].parse().map_err(|e| format!("Invalid year: {e}"))?;
         let month: u32 = caps[2].parse().map_err(|e| format!("Invalid month: {e}"))?;
         if !(1..=12).contains(&month) {
@@ -54,31 +65,27 @@ pub fn parse_flexible_date(raw: &str, is_end: bool) -> Result<NaiveDate, String>
         if !is_end {
             return NaiveDate::from_ymd_opt(year, month, 1)
                 .ok_or_else(|| format!("Invalid date '{s}'"));
-        } else {
-            // Find last day of month
-            let next_month = if month == 12 {
-                NaiveDate::from_ymd_opt(year + 1, 1, 1)
-            } else {
-                NaiveDate::from_ymd_opt(year, month + 1, 1)
-            }
-            .ok_or_else(|| format!("Invalid next month calculation for '{s}'"))?;
-            return next_month
-                .checked_sub_days(Days::new(1))
-                .ok_or_else(|| format!("Invalid end of month for '{s}'"));
         }
+        // Find last day of month
+        let next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        }
+        .ok_or_else(|| format!("Invalid next month calculation for '{s}'"))?;
+        return next_month
+            .checked_sub_days(Days::new(1))
+            .ok_or_else(|| format!("Invalid end of month for '{s}'"));
     }
 
     // Check YYYY
-    let y_re = Regex::new(r"^(\d{4})$").map_err(|e| e.to_string())?;
-    if let Some(caps) = y_re.captures(s) {
+    if let Some(caps) = YEAR_ONLY_RE.captures(s) {
         let year: i32 = caps[1].parse().map_err(|e| format!("Invalid year: {e}"))?;
         if !is_end {
             return NaiveDate::from_ymd_opt(year, 1, 1)
                 .ok_or_else(|| format!("Invalid year '{s}'"));
-        } else {
-            return NaiveDate::from_ymd_opt(year, 12, 31)
-                .ok_or_else(|| format!("Invalid year '{s}'"));
         }
+        return NaiveDate::from_ymd_opt(year, 12, 31).ok_or_else(|| format!("Invalid year '{s}'"));
     }
 
     Err(format!(
@@ -239,16 +246,14 @@ pub fn inject_timeframe_into_prompt(template: &str, timeframe: &str) -> String {
         return template.replace("{{date}}", timeframe);
     }
 
-    let re_quoted = Regex::new(r#"(?im)^(\s*-?\s*timeframe\s*:\s*)"[^"]*""#).unwrap();
-    if re_quoted.is_match(template) {
-        return re_quoted
+    if TIMEFRAME_QUOTED_RE.is_match(template) {
+        return TIMEFRAME_QUOTED_RE
             .replace(template, format!("${{1}}\"{timeframe}\""))
             .to_string();
     }
 
-    let re_unquoted = Regex::new(r#"(?im)^(\s*-?\s*timeframe\s*:\s*)[^\r\n]+"#).unwrap();
-    if re_unquoted.is_match(template) {
-        return re_unquoted
+    if TIMEFRAME_UNQUOTED_RE.is_match(template) {
+        return TIMEFRAME_UNQUOTED_RE
             .replace(template, format!("${{1}}\"{timeframe}\""))
             .to_string();
     }

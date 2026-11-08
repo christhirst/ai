@@ -43,44 +43,49 @@ pub async fn fetch_s3_documents(
     default_bucket: Option<&str>,
     uris_or_keys: &[String],
 ) -> Result<Vec<DocumentAttachment>, Box<dyn std::error::Error + Send + Sync>> {
+    if uris_or_keys.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut attachments = Vec::with_capacity(uris_or_keys.len());
 
     let fallback_bucket = default_bucket
         .or(config.bucket.as_deref())
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty());
+
+    let region = if let Some(ref endpoint) = config.endpoint {
+        let ep = endpoint.trim().trim_end_matches('/').to_string();
+        Region::Custom {
+            region: config
+                .region
+                .clone()
+                .unwrap_or_else(|| "us-east-1".to_string()),
+            endpoint: ep,
+        }
+    } else if let Some(ref r) = config.region {
+        r.parse().unwrap_or(Region::UsEast1)
+    } else {
+        Region::UsEast1
+    };
+
+    let credentials = Credentials::new(
+        config.access_key.as_deref(),
+        config.secret_key.as_deref(),
+        config.session_token.as_deref(),
+        None,
+        None,
+    )?;
+
+    // Default path_style to true for custom endpoints (MinIO/Ceph/corporate S3) unless specified otherwise
+    let path_style = config
+        .path_style
+        .unwrap_or_else(|| config.endpoint.is_some());
 
     for uri_or_key in uris_or_keys {
         let (bucket_name, key) = parse_s3_uri(uri_or_key, fallback_bucket)?;
 
-        let region = if let Some(ref endpoint) = config.endpoint {
-            let ep = endpoint.trim().trim_end_matches('/').to_string();
-            Region::Custom {
-                region: config
-                    .region
-                    .clone()
-                    .unwrap_or_else(|| "us-east-1".to_string()),
-                endpoint: ep,
-            }
-        } else if let Some(ref r) = config.region {
-            r.parse().unwrap_or(Region::UsEast1)
-        } else {
-            Region::UsEast1
-        };
-
-        let credentials = Credentials::new(
-            config.access_key.as_deref(),
-            config.secret_key.as_deref(),
-            config.session_token.as_deref(),
-            None,
-            None,
-        )?;
-
-        let mut bucket = Bucket::new(&bucket_name, region, credentials)?;
-        // Default path_style to true for custom endpoints (MinIO/Ceph/corporate S3) unless specified otherwise
-        let path_style = config
-            .path_style
-            .unwrap_or_else(|| config.endpoint.is_some());
+        let mut bucket = Bucket::new(&bucket_name, region.clone(), credentials.clone())?;
         if path_style {
             bucket.set_path_style();
         }
@@ -116,16 +121,15 @@ pub async fn fetch_s3_documents(
                 filename: Some(full_uri),
             });
         } else {
-            let content = match String::from_utf8(bytes.clone()) {
+            let content = match String::from_utf8(bytes) {
                 Ok(s) => s,
-                Err(_) => String::from_utf8_lossy(&bytes).to_string(),
+                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
             };
 
             if content.trim().is_empty() {
-                return Err(format!(
-                    "Document '{full_uri}' contains no readable text content."
-                )
-                .into());
+                return Err(
+                    format!("Document '{full_uri}' contains no readable text content.").into(),
+                );
             }
 
             attachments.push(DocumentAttachment::Text {

@@ -1,7 +1,7 @@
 use crate::config::{AppConfig, DatabaseConfig};
 use crate::db::{
-    AppDb, execute_surrealql, get_defined_tables, get_table_schema_summary, init_db_from_config,
-    insert_dynamic_records, set_table_comment,
+    AppDb, escape_surreal_str, execute_surrealql, get_defined_tables, get_table_schema_summary,
+    init_db_from_config, insert_dynamic_records, set_table_comment,
 };
 use crate::grpc::extractor::{extract_table_data, fact_check_record};
 use crate::grpc::intervals::{
@@ -19,6 +19,27 @@ use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+struct PreparedIntervalRun {
+    db: AppDb,
+    steps: Vec<DateIntervalStep>,
+    model_fields: Vec<String>,
+    target_field_names: Vec<String>,
+    effective_ns: String,
+    effective_db: String,
+}
+
+#[derive(Clone, Copy)]
+struct LlmStepOverrides<'a> {
+    provider: Option<&'a str>,
+    model: Option<&'a str>,
+    temperature: Option<f64>,
+    preamble: Option<&'a str>,
+    enable_grounding: bool,
+    thinking_level: Option<&'a str>,
+    base_url: Option<&'a str>,
+}
+
+#[derive(Clone)]
 pub struct TablePopulatorServiceImpl {
     pub config: Arc<AppConfig>,
     pub db: Arc<AppDb>,
@@ -57,29 +78,12 @@ impl TablePopulatorServiceImpl {
     }
 
     /// Prepares database, interval date steps, and filtered schema for an interval run.
-    #[allow(clippy::too_many_arguments)]
     async fn prepare_interval_run(
         &self,
+        req: &PopulateTableIntervalRequest,
         prompt: &str,
         table_name: &str,
-        interval_str: &str,
-        start_date_str: &str,
-        end_date_str: &str,
-        ns_override: Option<&str>,
-        db_override: Option<&str>,
-        ddl_opt: Option<&str>,
-        omit_fields: &[String],
-    ) -> Result<
-        (
-            AppDb,
-            Vec<DateIntervalStep>,
-            Vec<String>,
-            Vec<String>,
-            String,
-            String,
-        ),
-        Status,
-    > {
+    ) -> Result<PreparedIntervalRun, Status> {
         if prompt.is_empty() {
             return Err(Status::invalid_argument(
                 "Prompt template must not be empty",
@@ -88,22 +92,24 @@ impl TablePopulatorServiceImpl {
         if table_name.is_empty() {
             return Err(Status::invalid_argument("Table name must not be empty"));
         }
-        if start_date_str.is_empty() {
+        if req.start_date.is_empty() {
             return Err(Status::invalid_argument("start_date must not be empty"));
         }
-        if end_date_str.is_empty() {
+        if req.end_date.is_empty() {
             return Err(Status::invalid_argument("end_date must not be empty"));
         }
 
-        let interval_type = parse_interval(interval_str).map_err(Status::invalid_argument)?;
+        let interval_type = parse_interval(&req.interval).map_err(Status::invalid_argument)?;
 
-        let steps = generate_interval_steps(interval_type, start_date_str, end_date_str)
+        let steps = generate_interval_steps(interval_type, &req.start_date, &req.end_date)
             .map_err(Status::invalid_argument)?;
 
+        let ns_override = req.namespace.as_deref();
+        let db_override = req.database.as_deref();
         let db = self.get_db_for_request(ns_override, db_override).await?;
 
         // 1. If DDL statement is provided, execute once before intervals
-        if let Some(ddl) = ddl_opt {
+        if let Some(ddl) = req.define_table_sql.as_deref() {
             let trimmed_ddl = ddl.trim();
             if !trimmed_ddl.is_empty() {
                 tracing::info!(table = %table_name, ddl = %trimmed_ddl, "Executing provided DDL in SurrealDB before intervals");
@@ -117,8 +123,10 @@ impl TablePopulatorServiceImpl {
         }
 
         // 2. Set table comment reflecting base prompt and date interval
-        let comment_str =
-            format!("{prompt} (Interval: {interval_str}, {start_date_str} to {end_date_str})");
+        let comment_str = format!(
+            "{prompt} (Interval: {}, {} to {})",
+            req.interval, req.start_date, req.end_date
+        );
         if let Err(e) = set_table_comment(&db, table_name, &comment_str).await {
             tracing::warn!(table = %table_name, error = %e, "Failed to set table comment");
         }
@@ -138,7 +146,8 @@ impl TablePopulatorServiceImpl {
             }
         };
 
-        let omit_set: std::collections::HashSet<&str> = omit_fields
+        let omit_set: std::collections::HashSet<&str> = req
+            .omit_fields
             .iter()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -170,33 +179,24 @@ impl TablePopulatorServiceImpl {
         let effective_ns = ns_override.unwrap_or(&self.config.db.namespace).to_string();
         let effective_db = db_override.unwrap_or(&self.config.db.database).to_string();
 
-        Ok((
+        Ok(PreparedIntervalRun {
             db,
             steps,
             model_fields,
             target_field_names,
             effective_ns,
             effective_db,
-        ))
+        })
     }
 
     /// Executes extraction and insertion for a single interval step.
-    #[allow(clippy::too_many_arguments)]
     async fn execute_single_interval_step(
         &self,
         step: &DateIntervalStep,
         template_prompt: &str,
         table_name: &str,
-        db: &AppDb,
-        model_fields: &[String],
-        target_field_names: &[String],
-        provider: Option<&str>,
-        model: Option<&str>,
-        temperature: Option<f64>,
-        preamble: Option<&str>,
-        enable_grounding: bool,
-        thinking_level: Option<&str>,
-        base_url: Option<&str>,
+        prepared: &PreparedIntervalRun,
+        overrides: LlmStepOverrides<'_>,
     ) -> IntervalIterationResult {
         let prompt = inject_timeframe_into_prompt(template_prompt, &step.timeframe_label);
         tracing::info!(
@@ -209,14 +209,14 @@ impl TablePopulatorServiceImpl {
             &self.config,
             &prompt,
             table_name,
-            model_fields,
-            provider,
-            model,
-            temperature,
-            preamble,
-            enable_grounding,
-            thinking_level,
-            base_url,
+            &prepared.model_fields,
+            overrides.provider,
+            overrides.model,
+            overrides.temperature,
+            overrides.preamble,
+            overrides.enable_grounding,
+            overrides.thinking_level,
+            overrides.base_url,
             &[],
         )
         .await
@@ -241,28 +241,29 @@ impl TablePopulatorServiceImpl {
             }
         };
 
-        let sanitized_records = sanitize_and_map_records(records, target_field_names);
+        let sanitized_records = sanitize_and_map_records(records, &prepared.target_field_names);
 
-        let inserted = match insert_dynamic_records(db, table_name, &sanitized_records).await {
-            Ok(ins) => ins,
-            Err(e) => {
-                tracing::error!(
-                    table = %table_name,
-                    timeframe = %step.timeframe_label,
-                    error = %e,
-                    "PopulateTableInterval step insertion failed"
-                );
-                return IntervalIterationResult {
-                    timeframe: step.timeframe_label.clone(),
-                    start_date: step.start_date.clone(),
-                    end_date: step.end_date.clone(),
-                    success: false,
-                    records_count: 0,
-                    message: format!("Insertion failed: {e}"),
-                    data_json: "[]".to_string(),
-                };
-            }
-        };
+        let inserted =
+            match insert_dynamic_records(&prepared.db, table_name, &sanitized_records).await {
+                Ok(ins) => ins,
+                Err(e) => {
+                    tracing::error!(
+                        table = %table_name,
+                        timeframe = %step.timeframe_label,
+                        error = %e,
+                        "PopulateTableInterval step insertion failed"
+                    );
+                    return IntervalIterationResult {
+                        timeframe: step.timeframe_label.clone(),
+                        start_date: step.start_date.clone(),
+                        end_date: step.end_date.clone(),
+                        success: false,
+                        records_count: 0,
+                        message: format!("Insertion failed: {e}"),
+                        data_json: "[]".to_string(),
+                    };
+                }
+            };
 
         let records_count = inserted.len() as u64;
         let data_json =
@@ -397,7 +398,7 @@ impl TablePopulatorServiceImpl {
         if let Some(ref st) = req.status_filter {
             let trimmed = st.trim();
             if !trimmed.is_empty() {
-                let escaped = trimmed.replace('\'', "\\'");
+                let escaped = escape_surreal_str(trimmed);
                 where_clauses.push(format!("status = '{escaped}'"));
             }
         }
@@ -446,19 +447,13 @@ impl TablePopulatorServiceImpl {
     }
 
     /// Executes a fact-check on a single record and optionally updates its status in SurrealDB.
-    #[allow(clippy::too_many_arguments)]
     async fn execute_single_fact_check(
         &self,
         db: &AppDb,
         table_name: &str,
         record: &serde_json::Value,
         update_db_status: bool,
-        provider: Option<&str>,
-        model: Option<&str>,
-        temperature: Option<f64>,
-        preamble: Option<&str>,
-        thinking_level: Option<&str>,
-        base_url: Option<&str>,
+        overrides: LlmStepOverrides<'_>,
     ) -> FactCheckResult {
         let record_id = match record.get("id") {
             Some(serde_json::Value::String(s)) => s.clone(),
@@ -484,12 +479,12 @@ impl TablePopulatorServiceImpl {
             &self.config,
             &record_json,
             table_name,
-            provider,
-            model,
-            temperature,
-            preamble,
-            thinking_level,
-            base_url,
+            overrides.provider,
+            overrides.model,
+            overrides.temperature,
+            overrides.preamble,
+            overrides.thinking_level,
+            overrides.base_url,
         )
         .await
         {
@@ -591,7 +586,9 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 &req.file_names,
             )
             .await
-            .map_err(|e| Status::invalid_argument(format!("Failed to retrieve S3 documents: {e}")))?
+            .map_err(|e| {
+                Status::invalid_argument(format!("Failed to retrieve S3 documents: {e}"))
+            })?
         } else {
             Vec::new()
         };
@@ -960,50 +957,33 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
-        let (db, steps, model_fields, target_field_names, effective_ns, effective_db) = self
-            .prepare_interval_run(
-                &prompt,
-                &table_name,
-                &req.interval,
-                &req.start_date,
-                &req.end_date,
-                req.namespace.as_deref(),
-                req.database.as_deref(),
-                req.define_table_sql.as_deref(),
-                &req.omit_fields,
-            )
+        let prepared = self
+            .prepare_interval_run(&req, &prompt, &table_name)
             .await?;
 
-        let enable_grounding = req.enable_grounding.unwrap_or(true);
-        let total_steps = steps.len();
+        let overrides = LlmStepOverrides {
+            provider: req.provider.as_deref(),
+            model: req.model.as_deref(),
+            temperature: req.temperature,
+            preamble: req.preamble.as_deref(),
+            enable_grounding: req.enable_grounding.unwrap_or(true),
+            thinking_level: req.thinking_level.as_deref(),
+            base_url: req.base_url.as_deref(),
+        };
+
+        let total_steps = prepared.steps.len();
         let mut iterations = Vec::with_capacity(total_steps);
         let mut total_records_count = 0u64;
         let mut completed_iterations = 0u32;
         let mut failed_iterations = 0u32;
 
-        let thinking_level = req.thinking_level.as_deref();
-
-        for (i, step) in steps.into_iter().enumerate() {
+        for (i, step) in prepared.steps.iter().enumerate() {
             if i > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
 
             let res = self
-                .execute_single_interval_step(
-                    &step,
-                    &prompt,
-                    &table_name,
-                    &db,
-                    &model_fields,
-                    &target_field_names,
-                    req.provider.as_deref(),
-                    req.model.as_deref(),
-                    req.temperature,
-                    req.preamble.as_deref(),
-                    enable_grounding,
-                    thinking_level,
-                    req.base_url.as_deref(),
-                )
+                .execute_single_interval_step(step, &prompt, &table_name, &prepared, overrides)
                 .await;
 
             if res.success {
@@ -1015,6 +995,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             iterations.push(res);
         }
 
+        let effective_ns = &prepared.effective_ns;
+        let effective_db = &prepared.effective_db;
         let reply = PopulateTableIntervalResponse {
             success: failed_iterations == 0,
             table_name: table_name.clone(),
@@ -1041,51 +1023,31 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
-        let (db, steps, model_fields, target_field_names, _ns, _db) = self
-            .prepare_interval_run(
-                &prompt,
-                &table_name,
-                &req.interval,
-                &req.start_date,
-                &req.end_date,
-                req.namespace.as_deref(),
-                req.database.as_deref(),
-                req.define_table_sql.as_deref(),
-                &req.omit_fields,
-            )
+        let prepared = self
+            .prepare_interval_run(&req, &prompt, &table_name)
             .await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        let this = Arc::new(TablePopulatorServiceImpl {
-            config: Arc::clone(&self.config),
-            db: Arc::clone(&self.db),
-        });
+        let this = self.clone();
 
         tokio::spawn(async move {
-            let enable_grounding = req.enable_grounding.unwrap_or(true);
-            let thinking_level = req.thinking_level.as_deref();
+            let overrides = LlmStepOverrides {
+                provider: req.provider.as_deref(),
+                model: req.model.as_deref(),
+                temperature: req.temperature,
+                preamble: req.preamble.as_deref(),
+                enable_grounding: req.enable_grounding.unwrap_or(true),
+                thinking_level: req.thinking_level.as_deref(),
+                base_url: req.base_url.as_deref(),
+            };
 
-            for (i, step) in steps.into_iter().enumerate() {
+            for (i, step) in prepared.steps.iter().enumerate() {
                 if i > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
 
                 let res = this
-                    .execute_single_interval_step(
-                        &step,
-                        &prompt,
-                        &table_name,
-                        &db,
-                        &model_fields,
-                        &target_field_names,
-                        req.provider.as_deref(),
-                        req.model.as_deref(),
-                        req.temperature,
-                        req.preamble.as_deref(),
-                        enable_grounding,
-                        thinking_level,
-                        req.base_url.as_deref(),
-                    )
+                    .execute_single_interval_step(step, &prompt, &table_name, &prepared, overrides)
                     .await;
 
                 if tx.send(Ok(res)).await.is_err() {
@@ -1109,12 +1071,15 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         tracing::info!(table = %table_name, count = total_found, "Starting batch fact-check");
 
         let update_db_status = req.update_db_status.unwrap_or(true);
-        let provider = req.provider.as_deref();
-        let model = req.model.as_deref();
-        let temperature = req.temperature;
-        let preamble = req.preamble.as_deref();
-        let thinking_level = req.thinking_level.as_deref();
-        let base_url = req.base_url.as_deref();
+        let overrides = LlmStepOverrides {
+            provider: req.provider.as_deref(),
+            model: req.model.as_deref(),
+            temperature: req.temperature,
+            preamble: req.preamble.as_deref(),
+            enable_grounding: true,
+            thinking_level: req.thinking_level.as_deref(),
+            base_url: req.base_url.as_deref(),
+        };
 
         let mut results = Vec::with_capacity(total_found);
         let mut confirmed_count = 0u64;
@@ -1130,18 +1095,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             }
 
             let res = self
-                .execute_single_fact_check(
-                    &db,
-                    &table_name,
-                    record,
-                    update_db_status,
-                    provider,
-                    model,
-                    temperature,
-                    preamble,
-                    thinking_level,
-                    base_url,
-                )
+                .execute_single_fact_check(&db, &table_name, record, update_db_status, overrides)
                 .await;
 
             if res.success {
@@ -1193,19 +1147,19 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let (db, records) = self.fetch_records_for_fact_check(&req).await?;
         let (tx, rx) = tokio::sync::mpsc::channel(16);
 
-        let this = Arc::new(TablePopulatorServiceImpl {
-            config: Arc::clone(&self.config),
-            db: Arc::clone(&self.db),
-        });
+        let this = self.clone();
 
         tokio::spawn(async move {
             let update_db_status = req.update_db_status.unwrap_or(true);
-            let provider = req.provider.as_deref();
-            let model = req.model.as_deref();
-            let temperature = req.temperature;
-            let preamble = req.preamble.as_deref();
-            let thinking_level = req.thinking_level.as_deref();
-            let base_url = req.base_url.as_deref();
+            let overrides = LlmStepOverrides {
+                provider: req.provider.as_deref(),
+                model: req.model.as_deref(),
+                temperature: req.temperature,
+                preamble: req.preamble.as_deref(),
+                enable_grounding: true,
+                thinking_level: req.thinking_level.as_deref(),
+                base_url: req.base_url.as_deref(),
+            };
 
             for (i, record) in records.iter().enumerate() {
                 if i > 0 {
@@ -1218,12 +1172,7 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                         &table_name,
                         record,
                         update_db_status,
-                        provider,
-                        model,
-                        temperature,
-                        preamble,
-                        thinking_level,
-                        base_url,
+                        overrides,
                     )
                     .await;
 

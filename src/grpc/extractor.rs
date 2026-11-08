@@ -1,36 +1,55 @@
 use crate::config::{AppConfig, ModelProvider};
 use crate::grpc::file_attachment::DocumentAttachment;
-use rig::completion::message::{Document, DocumentMediaType, DocumentSourceKind, UserContent};
 use rig::completion::Message;
+use rig::completion::message::{Document, DocumentMediaType, DocumentSourceKind, UserContent};
 use rig::prelude::*;
 use rig::providers::{gemini, openai};
 use serde_json::json;
 
+/// Combines any decoded UTF-8 text attachments with the user prompt.
+pub fn build_effective_prompt_with_text_attachments(
+    prompt: &str,
+    attachments: &[DocumentAttachment],
+) -> String {
+    if attachments.is_empty() {
+        return prompt.to_string();
+    }
+
+    let mut text_parts = Vec::new();
+    for att in attachments {
+        if let DocumentAttachment::Text { content, filename } = att {
+            let file_label = filename
+                .as_deref()
+                .map(|n| format!(" (from file '{n}')"))
+                .unwrap_or_default();
+            text_parts.push(format!(
+                "DOCUMENT CONTENT{file_label}:\n\
+                ====================\n\
+                {content}\n\
+                ===================="
+            ));
+        }
+    }
+
+    if text_parts.is_empty() {
+        prompt.to_string()
+    } else {
+        format!(
+            "{}\n\nEXTRACTION INSTRUCTION:\n{prompt}",
+            text_parts.join("\n\n")
+        )
+    }
+}
+
 async fn dispatch_agent_prompt<M>(
     agent: &rig::agent::Agent<M>,
-    prompt: &str,
+    effective_prompt: &str,
     attachments: &[DocumentAttachment],
 ) -> Result<String, Box<dyn std::error::Error>>
 where
     M: rig::completion::CompletionModel + 'static,
 {
-    if attachments.is_empty() {
-        let response = agent.prompt(prompt.to_string()).await?;
-        return Ok(response);
-    }
-
-    // 1. Combine text attachments into prompt
-    let mut combined_prompt = prompt.to_string();
-    for att in attachments {
-        if let DocumentAttachment::Text { content, filename } = att {
-            let fname = filename.as_deref().unwrap_or("document");
-            combined_prompt.push_str(&format!(
-                "\n\n--- Document: {fname} ---\n{content}\n--- End Document ---\n"
-            ));
-        }
-    }
-
-    // 2. Collect any multimodal PDF documents
+    // Collect any multimodal PDF documents (text attachments are already in `effective_prompt`)
     let pdf_docs: Vec<Document> = attachments
         .iter()
         .filter_map(|att| match att {
@@ -39,15 +58,16 @@ where
                 media_type: Some(DocumentMediaType::PDF),
                 additional_params: None,
             }),
-            _ => None,
+            DocumentAttachment::Text { .. } => None,
         })
         .collect();
 
     if pdf_docs.is_empty() {
-        let response = agent.prompt(combined_prompt).await?;
+        let response = agent.prompt(effective_prompt).await?;
         Ok(response)
     } else {
-        let mut user_parts = vec![UserContent::text(combined_prompt)];
+        let mut user_parts = Vec::with_capacity(1 + pdf_docs.len());
+        user_parts.push(UserContent::text(effective_prompt));
         for doc in pdf_docs {
             user_parts.push(UserContent::Document(doc));
         }
@@ -62,22 +82,11 @@ where
     }
 }
 
-/// Extracts structured data from Gemini / Qwen / Local1 / Local2 conforming to the given table schema.
-#[allow(clippy::too_many_arguments)]
-pub async fn extract_table_data(
+fn resolve_provider_and_model(
     config: &AppConfig,
-    prompt: &str,
-    table_name: &str,
-    fields: &[String],
     provider_override: Option<&str>,
     model_override: Option<&str>,
-    temperature_override: Option<f64>,
-    preamble_override: Option<&str>,
-    enable_grounding: bool,
-    thinking_level_override: Option<&str>,
-    base_url_override: Option<&str>,
-    attachments: &[DocumentAttachment],
-) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+) -> Result<(ModelProvider, String), Box<dyn std::error::Error>> {
     let provider = match provider_override {
         Some(p) if !p.trim().is_empty() => p
             .parse::<ModelProvider>()
@@ -109,34 +118,109 @@ pub async fn extract_table_data(
         },
     };
 
-    // If text attachments are provided, incorporate their decoded UTF-8 contents into the prompt
-    let effective_prompt = if !attachments.is_empty() {
-        let mut text_parts = Vec::new();
-        for att in attachments {
-            if let DocumentAttachment::Text { content, filename } = att {
-                let file_label = filename
-                    .as_deref()
-                    .map(|n| format!(" (from file '{n}')"))
-                    .unwrap_or_default();
-                text_parts.push(format!(
-                    "DOCUMENT CONTENT{file_label}:\n\
-                    ====================\n\
-                    {content}\n\
-                    ===================="
-                ));
-            }
-        }
-        if text_parts.is_empty() {
-            prompt.to_string()
-        } else {
-            format!(
-                "{}\n\nEXTRACTION INSTRUCTION:\n{prompt}",
-                text_parts.join("\n\n")
+    Ok((provider, model))
+}
+
+fn normalize_thinking_level(
+    thinking_level_override: Option<&str>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    match thinking_level_override.map(|s| s.trim().to_lowercase()) {
+        Some(s) if s.is_empty() => Ok(None),
+        Some(s) => match s.as_str() {
+            "minimal" | "low" | "medium" | "high" => Ok(Some(s)),
+            other => Err(format!(
+                "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
             )
-        }
+            .into()),
+        },
+        None => Ok(None),
+    }
+}
+
+fn build_gemini_additional_params(
+    enable_grounding: bool,
+    effective_thinking_level: Option<String>,
+) -> Option<serde_json::Value> {
+    let mut additional_params = serde_json::Map::new();
+
+    if enable_grounding {
+        additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+    }
+
+    if let Some(level) = effective_thinking_level {
+        let mut gen_config = serde_json::Map::new();
+        gen_config.insert(
+            "thinkingConfig".to_string(),
+            json!({"thinkingLevel": level}),
+        );
+        additional_params.insert(
+            "generationConfig".to_string(),
+            serde_json::Value::Object(gen_config),
+        );
+    }
+
+    if additional_params.is_empty() {
+        None
     } else {
-        prompt.to_string()
+        Some(serde_json::Value::Object(additional_params))
+    }
+}
+
+fn resolve_local_endpoint_and_key<'a>(
+    config: &'a AppConfig,
+    provider: ModelProvider,
+    base_url_override: Option<&str>,
+) -> Result<(String, &'a str), Box<dyn std::error::Error>> {
+    let local_cfg = match provider {
+        ModelProvider::Local1 => config.local1.as_ref(),
+        ModelProvider::Local2 => config.local2.as_ref(),
+        _ => None,
     };
+
+    let effective_base_url = base_url_override
+        .map(|u| u.trim().trim_end_matches('/'))
+        .filter(|u| !u.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            local_cfg.and_then(|c| {
+                c.base_url
+                    .as_deref()
+                    .map(|u| u.trim_end_matches('/').to_string())
+            })
+        })
+        .ok_or_else(|| {
+            format!(
+                "Base URL is not configured for provider '{provider}'. Please specify base_url in config [{provider}] or in request."
+            )
+        })?;
+
+    let api_key = local_cfg
+        .and_then(|c| c.api_key.as_deref())
+        .filter(|k| !k.trim().is_empty())
+        .unwrap_or("none");
+
+    Ok((effective_base_url, api_key))
+}
+
+/// Extracts structured data from Gemini / Qwen / Local1 / Local2 conforming to the given table schema.
+#[allow(clippy::too_many_arguments)]
+pub async fn extract_table_data(
+    config: &AppConfig,
+    prompt: &str,
+    table_name: &str,
+    fields: &[String],
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+    temperature_override: Option<f64>,
+    preamble_override: Option<&str>,
+    enable_grounding: bool,
+    thinking_level_override: Option<&str>,
+    base_url_override: Option<&str>,
+    attachments: &[DocumentAttachment],
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    let (provider, model) = resolve_provider_and_model(config, provider_override, model_override)?;
+
+    let effective_prompt = build_effective_prompt_with_text_attachments(prompt, attachments);
 
     // Build structured field specification and example template
     let field_spec = build_schema_prompt_section(table_name, fields);
@@ -161,9 +245,10 @@ pub async fn extract_table_data(
         5. If no records or incidents are found matching the criteria for the specified timeframe, return an empty JSON array: `[]`. Do NOT return empty text or any conversational explanation."
     );
 
+    let temp = temperature_override.or(config.temperature);
+
     let raw_response = match provider {
         ModelProvider::Gemini => {
-            // Enforce Gemini 3+ models only; older legacy models are prevented
             if !model.contains("gemini-3") {
                 return Err(format!(
                     "Unsupported model '{model}': only Gemini 3+ models (e.g. gemini-3.7-flash, gemini-3.8-flash) are supported for Gemini provider."
@@ -175,59 +260,21 @@ pub async fn extract_table_data(
             }
 
             let client = gemini::Client::new(&config.gemini_api_key)?;
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            // Validate thinking level if specified
-            let normalized_thinking_level = match thinking_level_override
-                .map(|s| s.trim().to_lowercase())
-            {
-                Some(s) if s.is_empty() => None,
-                Some(s) => match s.as_str() {
-                    "minimal" | "low" | "medium" | "high" => Some(s),
-                    other => {
-                        return Err(format!(
-                            "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
-                        ).into());
-                    }
-                },
-                None => None,
-            };
-
-            // Default to "low" if grounding is enabled and no thinking level is explicitly provided,
-            // to prevent runaway 10,000+ token thought loops that exhaust the turn.
+            let normalized_thinking_level = normalize_thinking_level(thinking_level_override)?;
             let effective_thinking_level = match (normalized_thinking_level, enable_grounding) {
                 (Some(level), _) => Some(level),
                 (None, true) => Some("low".to_string()),
                 (None, false) => None,
             };
 
-            let mut additional_params = serde_json::Map::new();
-
-            if enable_grounding {
-                additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+            if let Some(params) =
+                build_gemini_additional_params(enable_grounding, effective_thinking_level)
+            {
+                builder = builder.additional_params(params);
             }
 
-            let mut gen_config = serde_json::Map::new();
-            if let Some(level) = effective_thinking_level {
-                gen_config.insert(
-                    "thinkingConfig".to_string(),
-                    json!({"thinkingLevel": level}),
-                );
-            }
-
-            if !gen_config.is_empty() {
-                additional_params.insert(
-                    "generationConfig".to_string(),
-                    serde_json::Value::Object(gen_config),
-                );
-            }
-
-            if !additional_params.is_empty() {
-                builder = builder.additional_params(serde_json::Value::Object(additional_params));
-            }
-
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
@@ -259,10 +306,8 @@ pub async fn extract_table_data(
                 .base_url(effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            // Web search is passed ONLY when enable_grounding is true
             if enable_grounding {
                 builder = builder.additional_params(json!({
                     "enable_search": true,
@@ -274,7 +319,6 @@ pub async fn extract_table_data(
                 }));
             }
 
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
@@ -294,43 +338,16 @@ pub async fn extract_table_data(
             dispatch_agent_prompt(&agent, &effective_prompt, attachments).await?
         }
         ModelProvider::Local1 | ModelProvider::Local2 => {
-            let local_cfg = match provider {
-                ModelProvider::Local1 => config.local1.as_ref(),
-                ModelProvider::Local2 => config.local2.as_ref(),
-                _ => None,
-            };
-
-            let effective_base_url = base_url_override
-                .map(|u| u.trim().trim_end_matches('/'))
-                .filter(|u| !u.is_empty())
-                .map(ToString::to_string)
-                .or_else(|| {
-                    local_cfg.and_then(|c| {
-                        c.base_url
-                            .as_deref()
-                            .map(|u| u.trim_end_matches('/').to_string())
-                    })
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "Base URL is not configured for provider '{provider}'. Please specify base_url in config [{provider}] or in request."
-                    )
-                })?;
-
-            let api_key = local_cfg
-                .and_then(|c| c.api_key.as_deref())
-                .filter(|k| !k.trim().is_empty())
-                .unwrap_or("none");
+            let (effective_base_url, api_key) =
+                resolve_local_endpoint_and_key(config, provider, base_url_override)?;
 
             let client = openai::CompletionsClient::builder()
                 .api_key(api_key)
                 .base_url(&effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
@@ -361,7 +378,6 @@ pub async fn extract_table_data(
 
     Ok(parsed_records)
 }
-
 
 /// Helper function to parse raw LLM response text into a Vec of JSON objects,
 /// handling markdown fences, whitespace, and root object wrappers.
@@ -596,36 +612,7 @@ pub async fn fact_check_record(
     thinking_level_override: Option<&str>,
     base_url_override: Option<&str>,
 ) -> Result<FactCheckOutcome, Box<dyn std::error::Error>> {
-    let provider = match provider_override {
-        Some(p) if !p.trim().is_empty() => p
-            .parse::<ModelProvider>()
-            .map_err(Box::<dyn std::error::Error>::from)?,
-        _ => config.provider,
-    };
-
-    let model = match model_override.filter(|m| !m.trim().is_empty()) {
-        Some(m) => m.to_string(),
-        None => match provider {
-            ModelProvider::Gemini => config.model.clone(),
-            ModelProvider::Qwen => {
-                if config.model.contains("gemini") {
-                    config.qwen_model.clone()
-                } else {
-                    config.model.clone()
-                }
-            }
-            ModelProvider::Local1 => config
-                .local1
-                .as_ref()
-                .and_then(|c| c.model.clone())
-                .unwrap_or_else(|| "default".to_string()),
-            ModelProvider::Local2 => config
-                .local2
-                .as_ref()
-                .and_then(|c| c.model.clone())
-                .unwrap_or_else(|| "default".to_string()),
-        },
-    };
+    let (provider, model) = resolve_provider_and_model(config, provider_override, model_override)?;
 
     let base_preamble = preamble_override
         .or(config.preamble.as_deref())
@@ -665,6 +652,8 @@ pub async fn fact_check_record(
         Return ONLY the requested JSON object."
     );
 
+    let temp = temperature_override.or(config.temperature);
+
     let raw_response = match provider {
         ModelProvider::Gemini => {
             if !model.contains("gemini-3") {
@@ -678,43 +667,18 @@ pub async fn fact_check_record(
             }
 
             let client = gemini::Client::new(&config.gemini_api_key)?;
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            let normalized_thinking_level = match thinking_level_override
-                .map(|s| s.trim().to_lowercase())
-            {
-                Some(s) if s.is_empty() => None,
-                Some(s) => match s.as_str() {
-                    "minimal" | "low" | "medium" | "high" => Some(s),
-                    other => {
-                        return Err(format!(
-                            "Invalid thinking_level '{other}': allowed values are 'minimal', 'low', 'medium', 'high'."
-                        ).into());
-                    }
-                },
-                None => None,
-            };
-
+            let normalized_thinking_level = normalize_thinking_level(thinking_level_override)?;
             let effective_thinking_level =
                 normalized_thinking_level.unwrap_or_else(|| "low".to_string());
 
-            let mut additional_params = serde_json::Map::new();
-            additional_params.insert("tools".to_string(), json!([{"google_search": {}}]));
+            if let Some(params) =
+                build_gemini_additional_params(true, Some(effective_thinking_level))
+            {
+                builder = builder.additional_params(params);
+            }
 
-            let mut gen_config = serde_json::Map::new();
-            gen_config.insert(
-                "thinkingConfig".to_string(),
-                json!({"thinkingLevel": effective_thinking_level}),
-            );
-            additional_params.insert(
-                "generationConfig".to_string(),
-                serde_json::Value::Object(gen_config),
-            );
-
-            builder = builder.additional_params(serde_json::Value::Object(additional_params));
-
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
@@ -745,19 +709,18 @@ pub async fn fact_check_record(
                 .base_url(effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client
+                .agent(&model)
+                .preamble(&system_instructions)
+                .additional_params(json!({
+                    "enable_search": true,
+                    "search_options": {
+                        "forced_search": true,
+                        "search_strategy": "max",
+                        "enable_source": true
+                    }
+                }));
 
-            builder = builder.additional_params(json!({
-                "enable_search": true,
-                "search_options": {
-                    "forced_search": true,
-                    "search_strategy": "max",
-                    "enable_source": true
-                }
-            }));
-
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
@@ -775,43 +738,16 @@ pub async fn fact_check_record(
             agent.prompt(&prompt).await?
         }
         ModelProvider::Local1 | ModelProvider::Local2 => {
-            let local_cfg = match provider {
-                ModelProvider::Local1 => config.local1.as_ref(),
-                ModelProvider::Local2 => config.local2.as_ref(),
-                _ => None,
-            };
-
-            let effective_base_url = base_url_override
-                .map(|u| u.trim().trim_end_matches('/'))
-                .filter(|u| !u.is_empty())
-                .map(ToString::to_string)
-                .or_else(|| {
-                    local_cfg.and_then(|c| {
-                        c.base_url
-                            .as_deref()
-                            .map(|u| u.trim_end_matches('/').to_string())
-                    })
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "Base URL is not configured for provider '{provider}'. Please specify base_url in config [{provider}] or in request."
-                    )
-                })?;
-
-            let api_key = local_cfg
-                .and_then(|c| c.api_key.as_deref())
-                .filter(|k| !k.trim().is_empty())
-                .unwrap_or("none");
+            let (effective_base_url, api_key) =
+                resolve_local_endpoint_and_key(config, provider, base_url_override)?;
 
             let client = openai::CompletionsClient::builder()
                 .api_key(api_key)
                 .base_url(&effective_base_url)
                 .build()?;
 
-            let mut builder = client.agent(&model);
-            builder = builder.preamble(&system_instructions);
+            let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            let temp = temperature_override.or(config.temperature);
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }

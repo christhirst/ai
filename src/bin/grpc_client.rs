@@ -197,15 +197,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let table = cli.table.unwrap_or_else(|| "homecides".to_string());
 
     let has_files = !cli.files.is_empty();
-    let prompt = cli
-        .prompt
-        .unwrap_or_else(|| {
-            if has_files {
-                String::new()
-            } else {
-                config.prompt_typed.query.clone()
-            }
-        });
+    let prompt = cli.prompt.unwrap_or_else(|| {
+        if has_files {
+            String::new()
+        } else {
+            config.prompt_typed.query.clone()
+        }
+    });
 
     let effective_provider = cli.provider.as_deref().unwrap_or(match config.provider {
         ai::config::ModelProvider::Gemini => "gemini",
@@ -241,27 +239,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(interval) = cli.interval {
         let start_date = cli
             .start_date
-            .expect("--start-date is required when --interval is specified");
+            .ok_or("--start-date is required when --interval is specified")?;
         let end_date = cli
             .end_date
-            .expect("--end-date is required when --interval is specified");
+            .ok_or("--end-date is required when --interval is specified")?;
 
         println!("=== Populating SurrealDB Table iteratively over Intervals ===");
-        println!("Target Namespace: {}", target_ns);
-        println!("Target Database: {}", target_db);
-        println!("Target Table: {}", table);
-        println!("Provider: {}", effective_provider);
-        println!("Model: {}", model);
+        println!("Target Namespace: {target_ns}");
+        println!("Target Database: {target_db}");
+        println!("Target Table: {table}");
+        println!("Provider: {effective_provider}");
+        println!("Model: {model}");
         if let Some(ref bu) = cli.base_url {
-            println!("Base URL: {}", bu);
+            println!("Base URL: {bu}");
         }
-        println!("Interval: {}", interval);
-        println!("Date Range: {} to {}", start_date, end_date);
+        println!("Interval: {interval}");
+        println!("Date Range: {start_date} to {end_date}");
         if !cli.omit_fields.is_empty() {
             println!("Omit Fields: {:?}", cli.omit_fields);
         }
         if let Some(ddl) = &cli.ddl {
-            println!("Provided DDL: {}", ddl);
+            println!("Provided DDL: {ddl}");
         }
 
         let resp = client
@@ -318,29 +316,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("=== Populating SurrealDB Table via gRPC ===");
-    println!("Target Namespace: {}", target_ns);
-    println!("Target Database: {}", target_db);
-    println!("Target Table: {}", table);
-    println!("Provider: {}", effective_provider);
-    println!("Model: {}", model);
+    println!("Target Namespace: {target_ns}");
+    println!("Target Database: {target_db}");
+    println!("Target Table: {table}");
+    println!("Provider: {effective_provider}");
+    println!("Model: {model}");
     if let Some(ref bu) = cli.base_url {
-        println!("Base URL: {}", bu);
+        println!("Base URL: {bu}");
     }
     if !cli.omit_fields.is_empty() {
         println!("Omit Fields: {:?}", cli.omit_fields);
     }
     if let Some(tl) = &cli.thinking_level {
-        println!("Thinking Level: {}", tl);
+        println!("Thinking Level: {tl}");
     }
     if let Some(ddl) = &cli.ddl {
-        println!("Provided DDL: {}", ddl);
+        println!("Provided DDL: {ddl}");
     }
     if has_files {
         if let Some(ref conn) = cli.s3_connection {
-            println!("S3 Connection: {}", conn);
+            println!("S3 Connection: {conn}");
         }
         if let Some(ref b) = cli.s3_bucket {
-            println!("S3 Bucket: {}", b);
+            println!("S3 Bucket: {b}");
         }
         println!("S3 Files ({}): {:?}", cli.files.len(), cli.files);
     }

@@ -1,4 +1,4 @@
-use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES};
+use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES, escape_surreal_str};
 use crate::prompt_typed::{GdpRecord, Homecides};
 use surrealdb::{Connection, Surreal};
 
@@ -112,7 +112,8 @@ impl DbReadable for AppDb {
         match self {
             AppDb::Local(local) => local.gdp_records_by_year(year).await,
             AppDb::Remote(remote) => {
-                let sql = format!("SELECT * FROM gdp_record WHERE year = '{year}'");
+                let escaped = escape_surreal_str(year);
+                let sql = format!("SELECT * FROM gdp_record WHERE year = '{escaped}'");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<GdpRecord> = serde_json::from_value(res).unwrap_or_default();
                 Ok(records)
@@ -138,7 +139,7 @@ impl DbReadable for AppDb {
         match self {
             AppDb::Local(local) => local.homecides_by_city(city).await,
             AppDb::Remote(remote) => {
-                let escaped = city.replace('\'', "\\'");
+                let escaped = escape_surreal_str(city);
                 let sql = format!("SELECT * FROM homecides WHERE citiy = '{escaped}'");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<Homecides> = serde_json::from_value(res).unwrap_or_default();
@@ -154,7 +155,7 @@ impl DbReadable for AppDb {
         match self {
             AppDb::Local(local) => local.homecides_by_citizenship(citizenship).await,
             AppDb::Remote(remote) => {
-                let escaped = citizenship.replace('\'', "\\'");
+                let escaped = escape_surreal_str(citizenship);
                 let sql = format!("SELECT * FROM homecides WHERE Citizenship = '{escaped}'");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<Homecides> = serde_json::from_value(res).unwrap_or_default();
@@ -170,7 +171,7 @@ impl DbReadable for AppDb {
         match self {
             AppDb::Local(local) => local.homecides_by_weapon(weapon).await,
             AppDb::Remote(remote) => {
-                let escaped = weapon.replace('\'', "\\'");
+                let escaped = escape_surreal_str(weapon);
                 let sql = format!("SELECT * FROM homecides WHERE weapon = '{escaped}'");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<Homecides> = serde_json::from_value(res).unwrap_or_default();

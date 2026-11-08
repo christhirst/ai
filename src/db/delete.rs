@@ -1,4 +1,4 @@
-use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES};
+use crate::db::{AppDb, TABLE_GDP, TABLE_HOMECIDES, escape_surreal_str};
 use crate::prompt_typed::{GdpRecord, Homecides};
 use surrealdb::{Connection, Surreal};
 
@@ -98,7 +98,8 @@ impl DbDeletable for AppDb {
         match self {
             AppDb::Local(local) => local.delete_gdps_by_year(year).await,
             AppDb::Remote(remote) => {
-                let sql = format!("DELETE FROM gdp_record WHERE year = '{year}'");
+                let escaped = escape_surreal_str(year);
+                let sql = format!("DELETE FROM gdp_record WHERE year = '{escaped}'");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<GdpRecord> = serde_json::from_value(res).unwrap_or_default();
                 Ok(records)
@@ -126,7 +127,7 @@ impl DbDeletable for AppDb {
         match self {
             AppDb::Local(local) => local.delete_homecides_by_city(city).await,
             AppDb::Remote(remote) => {
-                let escaped = city.replace('\'', "\\'");
+                let escaped = escape_surreal_str(city);
                 let sql = format!("DELETE FROM homecides WHERE citiy = '{escaped}' RETURN BEFORE");
                 let res = remote.query_raw(&sql).await?;
                 let records: Vec<Homecides> = serde_json::from_value(res).unwrap_or_default();
@@ -142,7 +143,7 @@ impl DbDeletable for AppDb {
         match self {
             AppDb::Local(local) => local.delete_homecides_by_citizenship(citizenship).await,
             AppDb::Remote(remote) => {
-                let escaped = citizenship.replace('\'', "\\'");
+                let escaped = escape_surreal_str(citizenship);
                 let sql =
                     format!("DELETE FROM homecides WHERE Citizenship = '{escaped}' RETURN BEFORE");
                 let res = remote.query_raw(&sql).await?;

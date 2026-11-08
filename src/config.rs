@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
-// TODO: Refactor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ExecutionVariant {
@@ -19,9 +18,9 @@ pub enum ExecutionVariant {
 impl fmt::Display for ExecutionVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecutionVariant::Normal => write!(f, "normal"),
-            ExecutionVariant::Typed => write!(f, "typed"),
-            ExecutionVariant::All => write!(f, "all"),
+            Self::Normal => write!(f, "normal"),
+            Self::Typed => write!(f, "typed"),
+            Self::All => write!(f, "all"),
         }
     }
 }
@@ -41,10 +40,10 @@ pub enum ModelProvider {
 impl fmt::Display for ModelProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModelProvider::Gemini => write!(f, "gemini"),
-            ModelProvider::Qwen => write!(f, "qwen"),
-            ModelProvider::Local1 => write!(f, "local1"),
-            ModelProvider::Local2 => write!(f, "local2"),
+            Self::Gemini => write!(f, "gemini"),
+            Self::Qwen => write!(f, "qwen"),
+            Self::Local1 => write!(f, "local1"),
+            Self::Local2 => write!(f, "local2"),
         }
     }
 }
@@ -54,13 +53,13 @@ impl std::str::FromStr for ModelProvider {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_lowercase().as_str() {
-            "gemini" | "google" => Ok(ModelProvider::Gemini),
-            "qwen" | "dashscope" | "aliyun" | "alibaba" => Ok(ModelProvider::Qwen),
+            "gemini" | "google" => Ok(Self::Gemini),
+            "qwen" | "dashscope" | "aliyun" | "alibaba" => Ok(Self::Qwen),
             "local1" | "local_1" | "custom1" | "custom_1" | "hosted1" | "hosted_1" => {
-                Ok(ModelProvider::Local1)
+                Ok(Self::Local1)
             }
             "local2" | "local_2" | "custom2" | "custom_2" | "hosted2" | "hosted_2" => {
-                Ok(ModelProvider::Local2)
+                Ok(Self::Local2)
             }
             other => Err(format!(
                 "Unsupported provider '{other}': allowed providers are 'gemini', 'qwen', 'local1', 'local2'."
@@ -132,7 +131,7 @@ impl Default for DatabaseConfig {
 }
 
 fn default_db_endpoint() -> String {
-    "".to_string()
+    String::new()
 }
 
 fn default_db_namespace() -> String {
@@ -378,8 +377,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             provider: ModelProvider::default(),
-            gemini_api_key: "".to_string(),
-            qwen_api_key: "".to_string(),
+            gemini_api_key: String::new(),
+            qwen_api_key: String::new(),
             qwen_base_url: default_qwen_base_url(),
             model: default_model(),
             qwen_model: default_qwen_model(),
@@ -397,6 +396,23 @@ impl Default for AppConfig {
             s3: HashMap::new(),
         }
     }
+}
+
+fn first_raw_env(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| std::env::var(k).ok())
+}
+
+fn first_non_empty_env(keys: &[&str]) -> Option<String> {
+    first_raw_env(keys).filter(|v| !v.trim().is_empty())
+}
+
+fn first_trimmed_env(keys: &[&str]) -> Option<String> {
+    first_non_empty_env(keys).map(|v| v.trim().to_string())
+}
+
+fn parse_bool_flag(s: &str) -> bool {
+    let trimmed = s.trim();
+    trimmed.eq_ignore_ascii_case("true") || trimmed == "1"
 }
 
 impl AppConfig {
@@ -470,37 +486,33 @@ impl AppConfig {
             }
         }
 
-        if let Ok(p) = std::env::var("PROVIDER")
-            .or_else(|_| std::env::var("APP_PROVIDER"))
-            .or_else(|_| std::env::var("AI_PROVIDER"))
+        if let Some(p) = first_raw_env(&["PROVIDER", "APP_PROVIDER", "AI_PROVIDER"])
             && let Ok(provider) = p.parse::<ModelProvider>()
         {
             config.provider = provider;
         }
 
-        if let Ok(key) = std::env::var("GEMINI_API_KEY")
-            && !key.trim().is_empty()
-        {
+        if let Some(key) = first_non_empty_env(&["GEMINI_API_KEY"]) {
             config.gemini_api_key = key;
         }
 
-        if let Ok(key) = std::env::var("QWEN_API_KEY")
-            .or_else(|_| std::env::var("DASHSCOPE_API_KEY"))
-            .or_else(|_| std::env::var("APP_QWEN_API_KEY"))
-            .or_else(|_| std::env::var("APP_DASHSCOPE_API_KEY"))
-            && !key.trim().is_empty()
-        {
-            config.qwen_api_key = key.trim().to_string();
+        if let Some(key) = first_trimmed_env(&[
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "APP_QWEN_API_KEY",
+            "APP_DASHSCOPE_API_KEY",
+        ]) {
+            config.qwen_api_key = key;
         }
 
-        if let Ok(base_url) = std::env::var("QWEN_BASE_URL")
-            .or_else(|_| std::env::var("DASHSCOPE_BASE_URL"))
-            .or_else(|_| std::env::var("APP_QWEN_BASE_URL"))
-            .or_else(|_| std::env::var("QWEN_URL"))
-            .or_else(|_| std::env::var("DASHSCOPE_URL"))
-            && !base_url.trim().is_empty()
-        {
-            config.qwen_base_url = base_url.trim().to_string();
+        if let Some(base_url) = first_trimmed_env(&[
+            "QWEN_BASE_URL",
+            "DASHSCOPE_BASE_URL",
+            "APP_QWEN_BASE_URL",
+            "QWEN_URL",
+            "DASHSCOPE_URL",
+        ]) {
+            config.qwen_base_url = base_url;
         }
 
         // Normalize qwen_base_url by stripping any trailing slash
@@ -510,64 +522,54 @@ impl AppConfig {
             .trim_end_matches('/')
             .to_string();
 
-        if let Ok(qm) = std::env::var("QWEN_MODEL").or_else(|_| std::env::var("APP_QWEN_MODEL"))
-            && !qm.trim().is_empty()
-        {
-            config.qwen_model = qm.trim().to_string();
+        if let Some(qm) = first_trimmed_env(&["QWEN_MODEL", "APP_QWEN_MODEL"]) {
+            config.qwen_model = qm;
         }
 
         // Environment variable overrides for local1
-        if let Ok(url) = std::env::var("LOCAL1_BASE_URL")
-            .or_else(|_| std::env::var("APP_LOCAL1_BASE_URL"))
-            .or_else(|_| std::env::var("LOCAL1_URL"))
-            .or_else(|_| std::env::var("CUSTOM1_BASE_URL"))
-            && !url.trim().is_empty()
-        {
+        if let Some(url) = first_trimmed_env(&[
+            "LOCAL1_BASE_URL",
+            "APP_LOCAL1_BASE_URL",
+            "LOCAL1_URL",
+            "CUSTOM1_BASE_URL",
+        ]) {
             let entry = config.local1.get_or_insert_with(Default::default);
-            entry.base_url = Some(url.trim().trim_end_matches('/').to_string());
+            entry.base_url = Some(url.trim_end_matches('/').to_string());
         }
-        if let Ok(key) = std::env::var("LOCAL1_API_KEY")
-            .or_else(|_| std::env::var("APP_LOCAL1_API_KEY"))
-            .or_else(|_| std::env::var("CUSTOM1_API_KEY"))
-            && !key.trim().is_empty()
+        if let Some(key) =
+            first_trimmed_env(&["LOCAL1_API_KEY", "APP_LOCAL1_API_KEY", "CUSTOM1_API_KEY"])
         {
             let entry = config.local1.get_or_insert_with(Default::default);
-            entry.api_key = Some(key.trim().to_string());
+            entry.api_key = Some(key);
         }
-        if let Ok(model) = std::env::var("LOCAL1_MODEL")
-            .or_else(|_| std::env::var("APP_LOCAL1_MODEL"))
-            .or_else(|_| std::env::var("CUSTOM1_MODEL"))
-            && !model.trim().is_empty()
+        if let Some(model) =
+            first_trimmed_env(&["LOCAL1_MODEL", "APP_LOCAL1_MODEL", "CUSTOM1_MODEL"])
         {
             let entry = config.local1.get_or_insert_with(Default::default);
-            entry.model = Some(model.trim().to_string());
+            entry.model = Some(model);
         }
 
         // Environment variable overrides for local2
-        if let Ok(url) = std::env::var("LOCAL2_BASE_URL")
-            .or_else(|_| std::env::var("APP_LOCAL2_BASE_URL"))
-            .or_else(|_| std::env::var("LOCAL2_URL"))
-            .or_else(|_| std::env::var("CUSTOM2_BASE_URL"))
-            && !url.trim().is_empty()
-        {
+        if let Some(url) = first_trimmed_env(&[
+            "LOCAL2_BASE_URL",
+            "APP_LOCAL2_BASE_URL",
+            "LOCAL2_URL",
+            "CUSTOM2_BASE_URL",
+        ]) {
             let entry = config.local2.get_or_insert_with(Default::default);
-            entry.base_url = Some(url.trim().trim_end_matches('/').to_string());
+            entry.base_url = Some(url.trim_end_matches('/').to_string());
         }
-        if let Ok(key) = std::env::var("LOCAL2_API_KEY")
-            .or_else(|_| std::env::var("APP_LOCAL2_API_KEY"))
-            .or_else(|_| std::env::var("CUSTOM2_API_KEY"))
-            && !key.trim().is_empty()
+        if let Some(key) =
+            first_trimmed_env(&["LOCAL2_API_KEY", "APP_LOCAL2_API_KEY", "CUSTOM2_API_KEY"])
         {
             let entry = config.local2.get_or_insert_with(Default::default);
-            entry.api_key = Some(key.trim().to_string());
+            entry.api_key = Some(key);
         }
-        if let Ok(model) = std::env::var("LOCAL2_MODEL")
-            .or_else(|_| std::env::var("APP_LOCAL2_MODEL"))
-            .or_else(|_| std::env::var("CUSTOM2_MODEL"))
-            && !model.trim().is_empty()
+        if let Some(model) =
+            first_trimmed_env(&["LOCAL2_MODEL", "APP_LOCAL2_MODEL", "CUSTOM2_MODEL"])
         {
             let entry = config.local2.get_or_insert_with(Default::default);
-            entry.model = Some(model.trim().to_string());
+            entry.model = Some(model);
         }
 
         // Normalize base URLs for local1 and local2
@@ -582,276 +584,251 @@ impl AppConfig {
             *url = url.trim().trim_end_matches('/').to_string();
         }
 
-        if let Ok(pass) = std::env::var("SURREAL_PASS")
-            .or_else(|_| std::env::var("SURREALDB_PASS"))
-            .or_else(|_| std::env::var("APP_SURREALDB_PASS"))
-            .or_else(|_| std::env::var("APP_SURREAL_PASS"))
-            .or_else(|_| std::env::var("DB_PASSWORD"))
-            .or_else(|_| std::env::var("APP_DB_PASSWORD"))
-            && !pass.trim().is_empty()
-        {
+        if let Some(pass) = first_non_empty_env(&[
+            "SURREAL_PASS",
+            "SURREALDB_PASS",
+            "APP_SURREALDB_PASS",
+            "APP_SURREAL_PASS",
+            "DB_PASSWORD",
+            "APP_DB_PASSWORD",
+        ]) {
             config.db.password = Some(pass);
         }
 
-        if let Ok(user) = std::env::var("SURREAL_USER")
-            .or_else(|_| std::env::var("SURREALDB_USER"))
-            .or_else(|_| std::env::var("APP_SURREALDB_USER"))
-            .or_else(|_| std::env::var("APP_SURREAL_USER"))
-            .or_else(|_| std::env::var("DB_USERNAME"))
-            .or_else(|_| std::env::var("DB_USER"))
-            .or_else(|_| std::env::var("APP_DB_USER"))
-            && !user.trim().is_empty()
-        {
+        if let Some(user) = first_non_empty_env(&[
+            "SURREAL_USER",
+            "SURREALDB_USER",
+            "APP_SURREALDB_USER",
+            "APP_SURREAL_USER",
+            "DB_USERNAME",
+            "DB_USER",
+            "APP_DB_USER",
+        ]) {
             config.db.username = Some(user);
         }
 
-        if let Ok(endpoint) = std::env::var("SURREAL_URL")
-            .or_else(|_| std::env::var("SURREALDB_URL"))
-            .or_else(|_| std::env::var("DB_ENDPOINT"))
-            .or_else(|_| std::env::var("APP_SURREAL_URL"))
-            .or_else(|_| std::env::var("APP_SURREALDB_URL"))
-            .or_else(|_| std::env::var("APP_DB_ENDPOINT"))
-            && !endpoint.trim().is_empty()
-        {
+        if let Some(endpoint) = first_non_empty_env(&[
+            "SURREAL_URL",
+            "SURREALDB_URL",
+            "DB_ENDPOINT",
+            "APP_SURREAL_URL",
+            "APP_SURREALDB_URL",
+            "APP_DB_ENDPOINT",
+        ]) {
             config.db.endpoint = endpoint;
         }
 
-        if let Ok(ns) = std::env::var("SURREAL_NS")
-            .or_else(|_| std::env::var("SURREALDB_NS"))
-            .or_else(|_| std::env::var("APP_SURREALDB_NS"))
-            .or_else(|_| std::env::var("APP_SURREAL_NS"))
-            .or_else(|_| std::env::var("DB_NAMESPACE"))
-            .or_else(|_| std::env::var("APP_DB_NAMESPACE"))
-            && !ns.trim().is_empty()
-        {
+        if let Some(ns) = first_non_empty_env(&[
+            "SURREAL_NS",
+            "SURREALDB_NS",
+            "APP_SURREALDB_NS",
+            "APP_SURREAL_NS",
+            "DB_NAMESPACE",
+            "APP_DB_NAMESPACE",
+        ]) {
             config.db.namespace = ns;
         }
 
-        if let Ok(db) = std::env::var("SURREAL_DB")
-            .or_else(|_| std::env::var("SURREALDB_DB"))
-            .or_else(|_| std::env::var("APP_SURREALDB_DB"))
-            .or_else(|_| std::env::var("APP_SURREAL_DB"))
-            .or_else(|_| std::env::var("DB_DATABASE"))
-            .or_else(|_| std::env::var("APP_DB_DATABASE"))
-            && !db.trim().is_empty()
-        {
+        if let Some(db) = first_non_empty_env(&[
+            "SURREAL_DB",
+            "SURREALDB_DB",
+            "APP_SURREALDB_DB",
+            "APP_SURREAL_DB",
+            "DB_DATABASE",
+            "APP_DB_DATABASE",
+        ]) {
             config.db.database = db;
         }
 
-        if let Ok(host) = std::env::var("GRPC_HOST").or_else(|_| std::env::var("APP_GRPC_HOST"))
-            && !host.trim().is_empty()
-        {
+        if let Some(host) = first_non_empty_env(&["GRPC_HOST", "APP_GRPC_HOST"]) {
             config.grpc.host = host;
         }
 
-        if let Ok(port_str) = std::env::var("GRPC_PORT").or_else(|_| std::env::var("APP_GRPC_PORT"))
+        if let Some(port_str) = first_raw_env(&["GRPC_PORT", "APP_GRPC_PORT"])
             && let Ok(port) = port_str.parse::<u16>()
         {
             config.grpc.port = port;
         }
 
-        if let Ok(admin_pw) = std::env::var("ADMIN_PASSWORD")
-            .or_else(|_| std::env::var("GRPC_ADMIN_PASSWORD"))
-            .or_else(|_| std::env::var("APP_ADMIN_PASSWORD"))
-            .or_else(|_| std::env::var("APP_GRPC_ADMIN_PASSWORD"))
-            .or_else(|_| std::env::var("APP_GRPC_AUTH_ADMIN_PASSWORD"))
-            && !admin_pw.trim().is_empty()
-        {
-            config.grpc.auth.admin_password = Some(admin_pw.trim().to_string());
+        if let Some(admin_pw) = first_trimmed_env(&[
+            "ADMIN_PASSWORD",
+            "GRPC_ADMIN_PASSWORD",
+            "APP_ADMIN_PASSWORD",
+            "APP_GRPC_ADMIN_PASSWORD",
+            "APP_GRPC_AUTH_ADMIN_PASSWORD",
+        ]) {
+            config.grpc.auth.admin_password = Some(admin_pw);
         }
 
-        if let Ok(admin_user) = std::env::var("ADMIN_USER")
-            .or_else(|_| std::env::var("GRPC_ADMIN_USER"))
-            .or_else(|_| std::env::var("APP_ADMIN_USER"))
-            .or_else(|_| std::env::var("APP_GRPC_ADMIN_USER"))
-            && !admin_user.trim().is_empty()
-        {
-            config.grpc.auth.admin_user = admin_user.trim().to_string();
+        if let Some(admin_user) = first_trimmed_env(&[
+            "ADMIN_USER",
+            "GRPC_ADMIN_USER",
+            "APP_ADMIN_USER",
+            "APP_GRPC_ADMIN_USER",
+        ]) {
+            config.grpc.auth.admin_user = admin_user;
         }
 
-        if let Ok(auth_enabled) =
-            std::env::var("GRPC_AUTH_ENABLED").or_else(|_| std::env::var("APP_GRPC_AUTH_ENABLED"))
-        {
-            let trimmed = auth_enabled.trim();
-            config.grpc.auth.enabled = Some(trimmed.eq_ignore_ascii_case("true") || trimmed == "1");
+        if let Some(auth_enabled) = first_raw_env(&["GRPC_AUTH_ENABLED", "APP_GRPC_AUTH_ENABLED"]) {
+            config.grpc.auth.enabled = Some(parse_bool_flag(&auth_enabled));
         }
 
-        if let Ok(jwks) = std::env::var("OAUTH_JWKS_URL")
-            .or_else(|_| std::env::var("GRPC_OAUTH_JWKS_URL"))
-            .or_else(|_| std::env::var("APP_OAUTH_JWKS_URL"))
-            && !jwks.trim().is_empty()
-        {
-            config.grpc.auth.oauth.jwks_url = Some(jwks.trim().to_string());
+        if let Some(jwks) = first_trimmed_env(&[
+            "OAUTH_JWKS_URL",
+            "GRPC_OAUTH_JWKS_URL",
+            "APP_OAUTH_JWKS_URL",
+        ]) {
+            config.grpc.auth.oauth.jwks_url = Some(jwks);
         }
 
-        if let Ok(iss) = std::env::var("OAUTH_ISSUER")
-            .or_else(|_| std::env::var("GRPC_OAUTH_ISSUER"))
-            .or_else(|_| std::env::var("APP_OAUTH_ISSUER"))
-            && !iss.trim().is_empty()
+        if let Some(iss) =
+            first_trimmed_env(&["OAUTH_ISSUER", "GRPC_OAUTH_ISSUER", "APP_OAUTH_ISSUER"])
         {
-            config.grpc.auth.oauth.issuer = Some(iss.trim().to_string());
+            config.grpc.auth.oauth.issuer = Some(iss);
         }
 
-        if let Ok(aud) = std::env::var("OAUTH_AUDIENCE")
-            .or_else(|_| std::env::var("GRPC_OAUTH_AUDIENCE"))
-            .or_else(|_| std::env::var("APP_OAUTH_AUDIENCE"))
-            && !aud.trim().is_empty()
-        {
-            config.grpc.auth.oauth.audience = Some(aud.trim().to_string());
+        if let Some(aud) = first_trimmed_env(&[
+            "OAUTH_AUDIENCE",
+            "GRPC_OAUTH_AUDIENCE",
+            "APP_OAUTH_AUDIENCE",
+        ]) {
+            config.grpc.auth.oauth.audience = Some(aud);
         }
 
-        if let Ok(secret) = std::env::var("OAUTH_JWT_SECRET")
-            .or_else(|_| std::env::var("GRPC_OAUTH_JWT_SECRET"))
-            .or_else(|_| std::env::var("APP_OAUTH_JWT_SECRET"))
-            .or_else(|_| std::env::var("AI_GRPC_OAUTH_SECRET"))
-            .or_else(|_| std::env::var("GRPC_OAUTH_SECRET"))
-            && !secret.trim().is_empty()
-        {
-            config.grpc.auth.oauth.jwt_secret = Some(secret.trim().to_string());
+        if let Some(secret) = first_trimmed_env(&[
+            "OAUTH_JWT_SECRET",
+            "GRPC_OAUTH_JWT_SECRET",
+            "APP_OAUTH_JWT_SECRET",
+            "AI_GRPC_OAUTH_SECRET",
+            "GRPC_OAUTH_SECRET",
+        ]) {
+            config.grpc.auth.oauth.jwt_secret = Some(secret);
         }
 
-        if let Ok(pub_key) = std::env::var("OAUTH_JWT_PUBLIC_KEY")
-            .or_else(|_| std::env::var("GRPC_OAUTH_JWT_PUBLIC_KEY"))
-            .or_else(|_| std::env::var("APP_OAUTH_JWT_PUBLIC_KEY"))
-            && !pub_key.trim().is_empty()
-        {
-            config.grpc.auth.oauth.jwt_public_key = Some(pub_key.trim().to_string());
+        if let Some(pub_key) = first_trimmed_env(&[
+            "OAUTH_JWT_PUBLIC_KEY",
+            "GRPC_OAUTH_JWT_PUBLIC_KEY",
+            "APP_OAUTH_JWT_PUBLIC_KEY",
+        ]) {
+            config.grpc.auth.oauth.jwt_public_key = Some(pub_key);
         }
 
-        if let Ok(enabled_str) = std::env::var("VAULT_ENABLED")
-            .or_else(|_| std::env::var("OPENBAO_ENABLED"))
-            .or_else(|_| std::env::var("APP_VAULT_ENABLED"))
+        if let Some(enabled_str) =
+            first_raw_env(&["VAULT_ENABLED", "OPENBAO_ENABLED", "APP_VAULT_ENABLED"])
         {
-            let trimmed = enabled_str.trim();
-            config.vault.enabled = trimmed.eq_ignore_ascii_case("true") || trimmed == "1";
+            config.vault.enabled = parse_bool_flag(&enabled_str);
         }
 
-        if let Ok(addr) = std::env::var("VAULT_ADDR")
-            .or_else(|_| std::env::var("OPENBAO_ADDR"))
-            .or_else(|_| std::env::var("APP_VAULT_ADDR"))
-            .or_else(|_| std::env::var("APP_VAULT_ADDRESS"))
-            && !addr.trim().is_empty()
-        {
-            config.vault.address = addr.trim().to_string();
+        if let Some(addr) = first_trimmed_env(&[
+            "VAULT_ADDR",
+            "OPENBAO_ADDR",
+            "APP_VAULT_ADDR",
+            "APP_VAULT_ADDRESS",
+        ]) {
+            config.vault.address = addr;
         }
 
-        if let Ok(token) = std::env::var("VAULT_TOKEN")
-            .or_else(|_| std::env::var("OPENBAO_TOKEN"))
-            .or_else(|_| std::env::var("APP_VAULT_TOKEN"))
-            && !token.trim().is_empty()
+        if let Some(token) = first_trimmed_env(&["VAULT_TOKEN", "OPENBAO_TOKEN", "APP_VAULT_TOKEN"])
         {
-            config.vault.token = Some(token.trim().to_string());
+            config.vault.token = Some(token);
         }
 
-        if let Ok(mount) = std::env::var("VAULT_MOUNT")
-            .or_else(|_| std::env::var("OPENBAO_MOUNT"))
-            .or_else(|_| std::env::var("APP_VAULT_MOUNT"))
-            && !mount.trim().is_empty()
+        if let Some(mount) = first_trimmed_env(&["VAULT_MOUNT", "OPENBAO_MOUNT", "APP_VAULT_MOUNT"])
         {
-            config.vault.mount = mount.trim().to_string();
+            config.vault.mount = mount;
         }
 
-        if let Ok(path) = std::env::var("VAULT_PATH")
-            .or_else(|_| std::env::var("OPENBAO_PATH"))
-            .or_else(|_| std::env::var("APP_VAULT_PATH"))
-            && !path.trim().is_empty()
-        {
-            config.vault.path = path.trim().to_string();
+        if let Some(path) = first_trimmed_env(&["VAULT_PATH", "OPENBAO_PATH", "APP_VAULT_PATH"]) {
+            config.vault.path = path;
         }
 
-        if let Ok(ns) = std::env::var("VAULT_NAMESPACE")
-            .or_else(|_| std::env::var("OPENBAO_NAMESPACE"))
-            .or_else(|_| std::env::var("APP_VAULT_NAMESPACE"))
-            && !ns.trim().is_empty()
-        {
-            config.vault.namespace = Some(ns.trim().to_string());
+        if let Some(ns) = first_trimmed_env(&[
+            "VAULT_NAMESPACE",
+            "OPENBAO_NAMESPACE",
+            "APP_VAULT_NAMESPACE",
+        ]) {
+            config.vault.namespace = Some(ns);
         }
 
-        if let Ok(ver_str) = std::env::var("VAULT_KV_VERSION")
-            .or_else(|_| std::env::var("OPENBAO_KV_VERSION"))
-            .or_else(|_| std::env::var("APP_VAULT_KV_VERSION"))
-            && let Ok(ver) = ver_str.trim().parse::<u32>()
+        if let Some(ver_str) = first_raw_env(&[
+            "VAULT_KV_VERSION",
+            "OPENBAO_KV_VERSION",
+            "APP_VAULT_KV_VERSION",
+        ]) && let Ok(ver) = ver_str.trim().parse::<u32>()
         {
             config.vault.kv_version = ver;
         }
 
-        if let Ok(auto_renew_str) = std::env::var("VAULT_AUTO_RENEW")
-            .or_else(|_| std::env::var("OPENBAO_AUTO_RENEW"))
-            .or_else(|_| std::env::var("APP_VAULT_AUTO_RENEW"))
-        {
-            let trimmed = auto_renew_str.trim();
-            config.vault.auto_renew = trimmed.eq_ignore_ascii_case("true") || trimmed == "1";
+        if let Some(auto_renew_str) = first_raw_env(&[
+            "VAULT_AUTO_RENEW",
+            "OPENBAO_AUTO_RENEW",
+            "APP_VAULT_AUTO_RENEW",
+        ]) {
+            config.vault.auto_renew = parse_bool_flag(&auto_renew_str);
         }
 
-        if let Ok(inc) = std::env::var("VAULT_RENEW_INCREMENT")
-            .or_else(|_| std::env::var("OPENBAO_RENEW_INCREMENT"))
-            .or_else(|_| std::env::var("APP_VAULT_RENEW_INCREMENT"))
-            && !inc.trim().is_empty()
-        {
-            config.vault.renew_increment = Some(inc.trim().to_string());
+        if let Some(inc) = first_trimmed_env(&[
+            "VAULT_RENEW_INCREMENT",
+            "OPENBAO_RENEW_INCREMENT",
+            "APP_VAULT_RENEW_INCREMENT",
+        ]) {
+            config.vault.renew_increment = Some(inc);
         }
 
         // Standard AWS / S3 environment variables populating or overriding s3["default"]
-        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL")
-            .or_else(|_| std::env::var("AWS_ENDPOINT"))
-            .or_else(|_| std::env::var("S3_ENDPOINT"))
-            .or_else(|_| std::env::var("S3_DEFAULT_ENDPOINT"))
-            && !endpoint.trim().is_empty()
-        {
+        if let Some(endpoint) = first_trimmed_env(&[
+            "AWS_ENDPOINT_URL",
+            "AWS_ENDPOINT",
+            "S3_ENDPOINT",
+            "S3_DEFAULT_ENDPOINT",
+        ]) {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.endpoint = Some(endpoint.trim().to_string());
+            entry.endpoint = Some(endpoint);
         }
 
-        if let Ok(region) = std::env::var("AWS_REGION")
-            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-            .or_else(|_| std::env::var("S3_REGION"))
-            .or_else(|_| std::env::var("S3_DEFAULT_REGION"))
-            && !region.trim().is_empty()
-        {
+        if let Some(region) = first_trimmed_env(&[
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "S3_REGION",
+            "S3_DEFAULT_REGION",
+        ]) {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.region = Some(region.trim().to_string());
+            entry.region = Some(region);
         }
 
-        if let Ok(bucket) = std::env::var("AWS_S3_BUCKET")
-            .or_else(|_| std::env::var("S3_BUCKET"))
-            .or_else(|_| std::env::var("S3_DEFAULT_BUCKET"))
-            && !bucket.trim().is_empty()
+        if let Some(bucket) =
+            first_trimmed_env(&["AWS_S3_BUCKET", "S3_BUCKET", "S3_DEFAULT_BUCKET"])
         {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.bucket = Some(bucket.trim().to_string());
+            entry.bucket = Some(bucket);
         }
 
-        if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID")
-            .or_else(|_| std::env::var("AWS_ACCESS_KEY"))
-            .or_else(|_| std::env::var("S3_ACCESS_KEY"))
-            .or_else(|_| std::env::var("S3_DEFAULT_ACCESS_KEY"))
-            && !key.trim().is_empty()
-        {
+        if let Some(key) = first_trimmed_env(&[
+            "AWS_ACCESS_KEY_ID",
+            "AWS_ACCESS_KEY",
+            "S3_ACCESS_KEY",
+            "S3_DEFAULT_ACCESS_KEY",
+        ]) {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.access_key = Some(key.trim().to_string());
+            entry.access_key = Some(key);
         }
 
-        if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY")
-            .or_else(|_| std::env::var("AWS_SECRET_KEY"))
-            .or_else(|_| std::env::var("S3_SECRET_KEY"))
-            .or_else(|_| std::env::var("S3_DEFAULT_SECRET_KEY"))
-            && !secret.trim().is_empty()
-        {
+        if let Some(secret) = first_trimmed_env(&[
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SECRET_KEY",
+            "S3_SECRET_KEY",
+            "S3_DEFAULT_SECRET_KEY",
+        ]) {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.secret_key = Some(secret.trim().to_string());
+            entry.secret_key = Some(secret);
         }
 
-        if let Ok(token) = std::env::var("AWS_SESSION_TOKEN")
-            .or_else(|_| std::env::var("S3_SESSION_TOKEN"))
-            && !token.trim().is_empty()
-        {
+        if let Some(token) = first_trimmed_env(&["AWS_SESSION_TOKEN", "S3_SESSION_TOKEN"]) {
             let entry = config.s3.entry("default".to_string()).or_default();
-            entry.session_token = Some(token.trim().to_string());
+            entry.session_token = Some(token);
         }
 
-        if let Ok(ps) = std::env::var("AWS_S3_PATH_STYLE")
-            .or_else(|_| std::env::var("S3_PATH_STYLE"))
-        {
+        if let Some(ps) = first_raw_env(&["AWS_S3_PATH_STYLE", "S3_PATH_STYLE"]) {
             let entry = config.s3.entry("default".to_string()).or_default();
             entry.path_style = Some(ps.eq_ignore_ascii_case("true") || ps == "1");
         }

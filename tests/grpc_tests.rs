@@ -339,7 +339,10 @@ async fn test_populate_table_request_receipt_and_validation() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert_eq!(err.message(), "Either prompt or S3 file_names must be provided");
+    assert_eq!(
+        err.message(),
+        "Either prompt or S3 file_names must be provided"
+    );
 
     // Empty table name validation failure after receiving request
     let err = service
@@ -923,7 +926,7 @@ async fn test_grpc_middleware_authentication_full_suite() {
         })
         .await
         .expect("Valid Basic Auth request failed");
-    assert!(resp.into_inner().tables.is_empty() || true);
+    assert!(resp.into_inner().tables.is_empty());
 
     // 4. Invalid OAuth token MUST be rejected
     let mut bad_oauth_client = connect_client_with_auth(
@@ -1560,16 +1563,40 @@ fn test_model_provider_local_parsing_and_aliases() {
     use std::str::FromStr;
 
     // Local1 and aliases
-    assert_eq!(ModelProvider::from_str("local1").unwrap(), ModelProvider::Local1);
-    assert_eq!(ModelProvider::from_str("custom1").unwrap(), ModelProvider::Local1);
-    assert_eq!(ModelProvider::from_str("hosted1").unwrap(), ModelProvider::Local1);
-    assert_eq!(ModelProvider::from_str("LOCAL1").unwrap(), ModelProvider::Local1);
+    assert_eq!(
+        ModelProvider::from_str("local1").unwrap(),
+        ModelProvider::Local1
+    );
+    assert_eq!(
+        ModelProvider::from_str("custom1").unwrap(),
+        ModelProvider::Local1
+    );
+    assert_eq!(
+        ModelProvider::from_str("hosted1").unwrap(),
+        ModelProvider::Local1
+    );
+    assert_eq!(
+        ModelProvider::from_str("LOCAL1").unwrap(),
+        ModelProvider::Local1
+    );
 
     // Local2 and aliases
-    assert_eq!(ModelProvider::from_str("local2").unwrap(), ModelProvider::Local2);
-    assert_eq!(ModelProvider::from_str("custom2").unwrap(), ModelProvider::Local2);
-    assert_eq!(ModelProvider::from_str("hosted2").unwrap(), ModelProvider::Local2);
-    assert_eq!(ModelProvider::from_str("LOCAL2").unwrap(), ModelProvider::Local2);
+    assert_eq!(
+        ModelProvider::from_str("local2").unwrap(),
+        ModelProvider::Local2
+    );
+    assert_eq!(
+        ModelProvider::from_str("custom2").unwrap(),
+        ModelProvider::Local2
+    );
+    assert_eq!(
+        ModelProvider::from_str("hosted2").unwrap(),
+        ModelProvider::Local2
+    );
+    assert_eq!(
+        ModelProvider::from_str("LOCAL2").unwrap(),
+        ModelProvider::Local2
+    );
 
     // Display
     assert_eq!(ModelProvider::Local1.to_string(), "local1");
@@ -1579,8 +1606,8 @@ fn test_model_provider_local_parsing_and_aliases() {
 #[tokio::test]
 async fn test_prepare_document_attachment_pdf_and_text() {
     use ai::grpc::file_attachment::{DocumentAttachment, prepare_document_attachment};
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
 
     // 1. PDF detection via %PDF- magic bytes
     let pdf_bytes = b"%PDF-1.4\n1 0 obj\n<< /Title (Test) >>\nendobj".to_vec();
@@ -1590,7 +1617,10 @@ async fn test_prepare_document_attachment_pdf_and_text() {
         .expect("Attachment should be Some");
 
     match att {
-        DocumentAttachment::Pdf { filename, base64_data } => {
+        DocumentAttachment::Pdf {
+            filename,
+            base64_data,
+        } => {
             assert_eq!(filename.as_deref(), Some("report.pdf"));
             assert_eq!(base64_data, STANDARD.encode(&pdf_bytes));
         }
@@ -1632,7 +1662,8 @@ async fn test_prepare_document_attachment_pdf_and_text() {
     assert!(att.is_none());
 
     // 5. Missing file path returns error
-    let res = prepare_document_attachment(None, Some("/nonexistent/file/path.pdf"), None, None).await;
+    let res =
+        prepare_document_attachment(None, Some("/nonexistent/file/path.pdf"), None, None).await;
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
     assert!(err.contains("Failed to read file from path"));
@@ -1640,7 +1671,9 @@ async fn test_prepare_document_attachment_pdf_and_text() {
     // 6. Loading from filesystem path
     let temp_dir = std::env::temp_dir();
     let test_file = temp_dir.join("test_grpc_file_attachment.txt");
-    tokio::fs::write(&test_file, b"content from disk").await.unwrap();
+    tokio::fs::write(&test_file, b"content from disk")
+        .await
+        .unwrap();
 
     let att = prepare_document_attachment(None, Some(test_file.to_str().unwrap()), None, None)
         .await
@@ -1703,12 +1736,14 @@ async fn test_grpc_populate_table_empty_prompt_allowed_with_attachment() {
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        !err.message().contains("Either prompt or S3 file_names must be provided"),
+        !err.message()
+            .contains("Either prompt or S3 file_names must be provided"),
         "Validation must not reject empty prompt when S3 files are specified. Error was: {}",
         err.message()
     );
     assert!(
-        err.message().contains("S3 connection 'default' not found in configuration"),
+        err.message()
+            .contains("S3 connection 'default' not found in configuration"),
         "Expected S3 connection missing error, got: {}",
         err.message()
     );
@@ -1752,14 +1787,16 @@ fn test_parse_s3_uri_scenarios() {
     // 6. Invalid s3:// URI without key
     let err = parse_s3_uri("s3://only-bucket", None).unwrap_err();
     assert!(
-        err.to_string().contains("expected format 's3://<bucket>/<key>'"),
+        err.to_string()
+            .contains("expected format 's3://<bucket>/<key>'"),
         "Expected invalid URI error, got: {err}"
     );
 
     // 7. Invalid s3:// URI with empty bucket
     let err = parse_s3_uri("s3:///some-key", None).unwrap_err();
     assert!(
-        err.to_string().contains("expected format 's3://<bucket>/<key>'"),
+        err.to_string()
+            .contains("expected format 's3://<bucket>/<key>'"),
         "Expected invalid URI error, got: {err}"
     );
 }
@@ -1799,14 +1836,18 @@ fn test_s3_config_resolution_and_toml_deserialization() {
     assert_eq!(config.s3.len(), 2);
 
     // Explicit lookup by name
-    let (name, s3_cfg) = config.get_s3_connection(Some("archive")).expect("Archive should exist");
+    let (name, s3_cfg) = config
+        .get_s3_connection(Some("archive"))
+        .expect("Archive should exist");
     assert_eq!(name, "archive");
     assert_eq!(s3_cfg.bucket.as_deref(), Some("archive-bucket"));
     assert_eq!(s3_cfg.region.as_deref(), Some("eu-central-1"));
     assert_eq!(s3_cfg.path_style, Some(false));
 
     // Default lookup when None is specified
-    let (name, s3_cfg) = config.get_s3_connection(None).expect("Default connection should resolve");
+    let (name, s3_cfg) = config
+        .get_s3_connection(None)
+        .expect("Default connection should resolve");
     assert_eq!(name, "default");
     assert_eq!(s3_cfg.bucket.as_deref(), Some("main-bucket"));
     assert_eq!(s3_cfg.path_style, Some(true));
@@ -1832,7 +1873,37 @@ fn test_s3_config_resolution_and_toml_deserialization() {
         s3: single_map,
         ..Default::default()
     };
-    let (name, _) = single_config.get_s3_connection(None).expect("Single entry fallback");
+    let (name, _) = single_config
+        .get_s3_connection(None)
+        .expect("Single entry fallback");
     assert_eq!(name, "custom_storage");
 }
 
+#[test]
+fn test_build_effective_prompt_with_text_attachments_no_duplication() {
+    use ai::grpc::extractor::build_effective_prompt_with_text_attachments;
+    use ai::grpc::file_attachment::DocumentAttachment;
+
+    let docs = vec![
+        DocumentAttachment::Text {
+            filename: Some("report.txt".to_string()),
+            content: "UNIQUE_MARKER_12345".to_string(),
+        },
+        DocumentAttachment::Pdf {
+            filename: Some("scan.pdf".to_string()),
+            base64_data: "JVBERi0xLjQK".to_string(),
+        },
+    ];
+
+    let prompt = build_effective_prompt_with_text_attachments("Extract rows", &docs);
+    assert!(prompt.ends_with("Extract rows"));
+    assert_eq!(
+        prompt.matches("UNIQUE_MARKER_12345").count(),
+        1,
+        "Text attachment content should be injected exactly once"
+    );
+    assert!(
+        !prompt.contains("scan.pdf"),
+        "PDF attachments are handled separately via multimodal content"
+    );
+}

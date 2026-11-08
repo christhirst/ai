@@ -69,15 +69,23 @@ pub async fn run(config: &AppConfig) -> Result<String, Box<dyn std::error::Error
             println!("\nAgent Response:\n{}", response);
             Ok(response)
         }
-        ModelProvider::Local1 => {
-            let local_cfg = config
-                .local1
-                .as_ref()
-                .ok_or("Local1 configuration is missing in config.toml or environment variables")?;
-            let model = local_cfg
-                .model
-                .as_deref()
-                .unwrap_or(&config.model);
+        ModelProvider::Local1 | ModelProvider::Local2 => {
+            let (local_cfg, label) = match config.provider {
+                ModelProvider::Local1 => (
+                    config.local1.as_ref().ok_or(
+                        "Local1 configuration is missing in config.toml or environment variables",
+                    )?,
+                    "Local1",
+                ),
+                ModelProvider::Local2 => (
+                    config.local2.as_ref().ok_or(
+                        "Local2 configuration is missing in config.toml or environment variables",
+                    )?,
+                    "Local2",
+                ),
+                _ => unreachable!(),
+            };
+            let model = local_cfg.model.as_deref().unwrap_or(&config.model);
             let api_key = local_cfg
                 .api_key
                 .as_deref()
@@ -103,56 +111,13 @@ pub async fn run(config: &AppConfig) -> Result<String, Box<dyn std::error::Error
             let agent = builder.build();
 
             println!(
-                "Provider: local1 | Model: {} (base_url: {})",
-                model, base_url
+                "Provider: {} | Model: {model} (base_url: {base_url})",
+                config.provider
             );
-            println!("Sending request to Local1...");
+            println!("Sending request to {label}...");
 
             let response = agent.prompt(&config.prompt.query).await?;
-            println!("\nAgent Response:\n{}", response);
-            Ok(response)
-        }
-        ModelProvider::Local2 => {
-            let local_cfg = config
-                .local2
-                .as_ref()
-                .ok_or("Local2 configuration is missing in config.toml or environment variables")?;
-            let model = local_cfg
-                .model
-                .as_deref()
-                .unwrap_or(&config.model);
-            let api_key = local_cfg
-                .api_key
-                .as_deref()
-                .filter(|k| !k.trim().is_empty())
-                .unwrap_or("none");
-            let base_url = local_cfg
-                .base_url
-                .as_deref()
-                .unwrap_or("http://localhost:8000/v1");
-
-            let client = openai::CompletionsClient::builder()
-                .api_key(api_key)
-                .base_url(base_url)
-                .build()?;
-            let mut builder = client.agent(model);
-
-            if let Some(preamble) = &config.preamble {
-                builder = builder.preamble(preamble);
-            }
-            if let Some(temperature) = config.temperature {
-                builder = builder.temperature(temperature);
-            }
-            let agent = builder.build();
-
-            println!(
-                "Provider: local2 | Model: {} (base_url: {})",
-                model, base_url
-            );
-            println!("Sending request to Local2...");
-
-            let response = agent.prompt(&config.prompt.query).await?;
-            println!("\nAgent Response:\n{}", response);
+            println!("\nAgent Response:\n{response}");
             Ok(response)
         }
     }

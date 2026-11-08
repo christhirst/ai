@@ -1,4 +1,4 @@
-use crate::db::AppDb;
+use crate::db::{AppDb, escape_surreal_str};
 use surrealdb::{Connection, Surreal};
 
 pub trait SchemaIntrospectable {
@@ -132,7 +132,7 @@ pub async fn set_table_comment<T: SchemaIntrospectable>(
     table: &str,
     comment: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let escaped = comment.replace('\\', "\\\\").replace('\'', "\\'");
+    let escaped = escape_surreal_str(comment);
     let sql = format!("DEFINE TABLE OVERWRITE {table} COMMENT '{escaped}';");
     db.execute_query(&sql).await?;
     Ok(())
