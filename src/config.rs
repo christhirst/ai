@@ -291,6 +291,14 @@ pub struct QwenConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+pub struct ExaConfig {
+    #[serde(default, alias = "url")]
+    pub base_url: Option<String>,
+    #[serde(default, alias = "key")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 pub struct S3StorageConfig {
     #[serde(default, alias = "url")]
     pub endpoint: Option<String>,
@@ -329,6 +337,12 @@ pub struct AppConfig {
     pub qwen_model: String,
     #[serde(default)]
     pub qwen: Option<QwenConfig>,
+    #[serde(default, alias = "exa_key")]
+    pub exa_api_key: String,
+    #[serde(default = "default_exa_base_url", alias = "exa_url")]
+    pub exa_base_url: String,
+    #[serde(default)]
+    pub exa: Option<ExaConfig>,
     #[serde(default, alias = "custom1", alias = "hosted1")]
     pub local1: Option<LocalLlmConfig>,
     #[serde(default, alias = "custom2", alias = "hosted2")]
@@ -361,6 +375,10 @@ pub fn default_qwen_model() -> String {
     "qwen-plus".to_string()
 }
 
+pub fn default_exa_base_url() -> String {
+    "https://api.exa.ai".to_string()
+}
+
 fn default_model() -> String {
     "gemini-3.5-flash-lite".to_string()
 }
@@ -383,6 +401,9 @@ impl Default for AppConfig {
             model: default_model(),
             qwen_model: default_qwen_model(),
             qwen: None,
+            exa_api_key: String::new(),
+            exa_base_url: default_exa_base_url(),
+            exa: None,
             local1: None,
             local2: None,
             temperature: default_temperature(),
@@ -436,12 +457,51 @@ impl AppConfig {
         }
     }
 
+    /// Resolves the Exa.ai API key to use, preferring the per-request override if non-empty,
+    /// otherwise falling back to the configured `exa_api_key` (or `[exa].api_key`).
+    pub fn resolve_exa_api_key(&self, override_key: Option<&str>) -> Option<String> {
+        if let Some(key) = override_key
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            return Some(key.to_string());
+        }
+        if !self.exa_api_key.trim().is_empty() {
+            return Some(self.exa_api_key.trim().to_string());
+        }
+        if let Some(ref exa) = self.exa
+            && let Some(ref key) = exa.api_key
+            && !key.trim().is_empty()
+        {
+            return Some(key.trim().to_string());
+        }
+        None
+    }
+
+    /// Resolves the Exa.ai base URL, preferring `[exa].base_url` if set, else `exa_base_url`.
+    pub fn resolve_exa_base_url(&self) -> String {
+        if let Some(ref exa) = self.exa
+            && let Some(ref url) = exa.base_url
+            && !url.trim().is_empty()
+        {
+            return url.trim().trim_end_matches('/').to_string();
+        }
+        let trimmed = self.exa_base_url.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
+            default_exa_base_url()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     pub fn load_from_config() -> Result<Self, ConfigError> {
         let builder = Config::builder()
             .set_default("provider", "gemini")?
             .set_default("gemini_api_key", "")?
             .set_default("qwen_api_key", "")?
             .set_default("qwen_base_url", default_qwen_base_url())?
+            .set_default("exa_api_key", "")?
+            .set_default("exa_base_url", default_exa_base_url())?
             .set_default("model", default_model())?
             .set_default("qwen_model", default_qwen_model())?
             .set_default("temperature", 0.0)?
@@ -525,6 +585,36 @@ impl AppConfig {
         if let Some(qm) = first_trimmed_env(&["QWEN_MODEL", "APP_QWEN_MODEL"]) {
             config.qwen_model = qm;
         }
+
+        // If [exa] table was configured in TOML, apply non-empty values
+        if let Some(ref exa) = config.exa {
+            if let Some(ref url) = exa.base_url
+                && !url.trim().is_empty()
+            {
+                config.exa_base_url = url.trim().to_string();
+            }
+            if let Some(ref key) = exa.api_key
+                && !key.trim().is_empty()
+            {
+                config.exa_api_key = key.trim().to_string();
+            }
+        }
+
+        if let Some(key) = first_trimmed_env(&["EXA_API_KEY", "APP_EXA_API_KEY", "EXA_KEY"]) {
+            config.exa_api_key = key;
+        }
+
+        if let Some(base_url) =
+            first_trimmed_env(&["EXA_BASE_URL", "APP_EXA_BASE_URL", "EXA_URL"])
+        {
+            config.exa_base_url = base_url;
+        }
+
+        config.exa_base_url = config
+            .exa_base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
 
         // Environment variable overrides for local1
         if let Some(url) = first_trimmed_env(&[
@@ -869,6 +959,32 @@ impl AppConfig {
         if let Some(url) = extract_str(&self.vault.keys.qwen_base_url) {
             self.qwen_base_url = url.trim().trim_end_matches('/').to_string();
             count += 1;
+        }
+
+        if let Some(key) = extract_str(&self.vault.keys.exa_api_key) {
+            self.exa_api_key = key.trim().to_string();
+            count += 1;
+        }
+        if let Some(exa_val) = secret_map.get("exa").and_then(|v| v.as_object()) {
+            if self.exa_api_key.is_empty()
+                && let Some(key) = exa_val
+                    .get("api_key")
+                    .or_else(|| exa_val.get("key"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+            {
+                self.exa_api_key = key.trim().to_string();
+                count += 1;
+            }
+            if let Some(url) = exa_val
+                .get("base_url")
+                .or_else(|| exa_val.get("url"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                self.exa_base_url = url.trim().trim_end_matches('/').to_string();
+                count += 1;
+            }
         }
 
         if let Some(val) = secret_map
@@ -1834,6 +1950,55 @@ qwen_url = "https://coding.dashscope.aliyuncs.com/v1"
         assert_eq!(
             config2.qwen_base_url,
             "https://coding.dashscope.aliyuncs.com/v1"
+        );
+    }
+
+    #[test]
+    fn test_exa_config_and_request_override_resolution() {
+        let toml_str = r#"
+exa_api_key = "config_exa_key_123"
+exa_base_url = "https://api.exa.ai/"
+"#;
+        let c = Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap();
+        let config: AppConfig = c.try_deserialize().unwrap();
+
+        assert_eq!(
+            config.resolve_exa_api_key(None).as_deref(),
+            Some("config_exa_key_123")
+        );
+        assert_eq!(
+            config.resolve_exa_api_key(Some("   ")).as_deref(),
+            Some("config_exa_key_123")
+        );
+        assert_eq!(
+            config
+                .resolve_exa_api_key(Some("rpc_override_exa_key_999"))
+                .as_deref(),
+            Some("rpc_override_exa_key_999")
+        );
+        assert_eq!(config.resolve_exa_base_url(), "https://api.exa.ai");
+
+        // Also test [exa] table and Vault secret resolution
+        let mut config_vault = AppConfig::default();
+        assert_eq!(config_vault.resolve_exa_api_key(None), None);
+
+        let secret_json = serde_json::json!({
+            "exa_api_key": "vault_exa_secret_key"
+        });
+        let count = config_vault.apply_secret_data(secret_json.as_object().unwrap());
+        assert_eq!(count, 1);
+        assert_eq!(
+            config_vault.resolve_exa_api_key(None).as_deref(),
+            Some("vault_exa_secret_key")
+        );
+        assert_eq!(
+            config_vault
+                .resolve_exa_api_key(Some("request_key_wins"))
+                .as_deref(),
+            Some("request_key_wins")
         );
     }
 }

@@ -97,6 +97,14 @@ struct Cli {
     #[arg(long = "thinking-level")]
     thinking_level: Option<String>,
 
+    /// Enable Exa.ai research tools (exa_search and exa_get_contents) for the agent
+    #[arg(long = "exa")]
+    exa: bool,
+
+    /// Optional Exa.ai API key override (can also be set via EXA_API_KEY or config.toml)
+    #[arg(long = "exa-api-key")]
+    exa_api_key: Option<String>,
+
     /// Execute arbitrary SurrealQL query
     #[arg(short = 'q', long)]
     query: Option<String>,
@@ -262,30 +270,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Provided DDL: {ddl}");
         }
 
-        let resp = client
-            .populate_table_interval(PopulateTableIntervalRequest {
-                prompt,
-                table_name: table,
-                interval,
-                start_date,
-                end_date,
-                namespace: cli.namespace,
-                database: cli.database,
-                define_table_sql: cli.ddl,
-                model: cli.model,
-                temperature: None,
-                preamble: None,
-                enable_grounding: Some(true),
-                omit_fields: cli.omit_fields.clone(),
-                thinking_level: cli.thinking_level.clone(),
-                provider: cli.provider,
-                base_url: cli.base_url.clone(),
-                s3_connection: cli.s3_connection.clone(),
-                file_names: cli.files.clone(),
-                s3_bucket: cli.s3_bucket.clone(),
-            })
-            .await?
-            .into_inner();
+        let use_exa = cli.exa
+            || cli
+                .exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty());
+        if use_exa {
+            println!("Exa.ai Research Tools: ENABLED");
+        }
+
+        let req = PopulateTableIntervalRequest {
+            prompt,
+            table_name: table,
+            interval,
+            start_date,
+            end_date,
+            namespace: cli.namespace,
+            database: cli.database,
+            define_table_sql: cli.ddl,
+            model: cli.model,
+            temperature: None,
+            preamble: None,
+            enable_grounding: Some(true),
+            omit_fields: cli.omit_fields.clone(),
+            thinking_level: cli.thinking_level.clone(),
+            provider: cli.provider,
+            base_url: cli.base_url.clone(),
+            s3_connection: cli.s3_connection.clone(),
+            file_names: cli.files.clone(),
+            s3_bucket: cli.s3_bucket.clone(),
+            exa_api_key: cli.exa_api_key.clone(),
+            enable_exa: if use_exa { Some(true) } else { None },
+        };
+
+        let resp = if use_exa {
+            client.populate_table_interval_exa(req).await?.into_inner()
+        } else {
+            client.populate_table_interval(req).await?.into_inner()
+        };
 
         println!("\n=== Interval Iterations Completed ===");
         println!("Success: {}", resp.success);
@@ -343,27 +365,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("S3 Files ({}): {:?}", cli.files.len(), cli.files);
     }
 
-    let resp = client
-        .populate_table(PopulateTableRequest {
-            prompt,
-            table_name: table,
-            namespace: cli.namespace,
-            database: cli.database,
-            define_table_sql: cli.ddl,
-            model: cli.model,
-            temperature: None,
-            preamble: None,
-            enable_grounding: if has_files { None } else { Some(true) },
-            omit_fields: cli.omit_fields,
-            thinking_level: cli.thinking_level,
-            provider: cli.provider,
-            base_url: cli.base_url,
-            s3_connection: cli.s3_connection,
-            file_names: cli.files,
-            s3_bucket: cli.s3_bucket,
-        })
-        .await?
-        .into_inner();
+    let use_exa = cli.exa
+        || cli
+            .exa_api_key
+            .as_deref()
+            .is_some_and(|k| !k.trim().is_empty());
+    if use_exa {
+        println!("Exa.ai Research Tools: ENABLED");
+    }
+
+    let req = PopulateTableRequest {
+        prompt,
+        table_name: table,
+        namespace: cli.namespace,
+        database: cli.database,
+        define_table_sql: cli.ddl,
+        model: cli.model,
+        temperature: None,
+        preamble: None,
+        enable_grounding: if has_files { None } else { Some(true) },
+        omit_fields: cli.omit_fields,
+        thinking_level: cli.thinking_level,
+        provider: cli.provider,
+        base_url: cli.base_url,
+        s3_connection: cli.s3_connection,
+        file_names: cli.files,
+        s3_bucket: cli.s3_bucket,
+        exa_api_key: cli.exa_api_key,
+        enable_exa: if use_exa { Some(true) } else { None },
+    };
+
+    let resp = if use_exa {
+        client.populate_table_exa(req).await?.into_inner()
+    } else {
+        client.populate_table(req).await?.into_inner()
+    };
 
     println!("\n=== Response ===");
     println!("Success: {}", resp.success);

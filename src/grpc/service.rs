@@ -3,7 +3,7 @@ use crate::db::{
     AppDb, escape_surreal_str, execute_surrealql, get_defined_tables, get_table_schema_summary,
     init_db_from_config, insert_dynamic_records, set_table_comment,
 };
-use crate::grpc::extractor::{extract_table_data, fact_check_record};
+use crate::grpc::extractor::{extract_table_data_with_exa, fact_check_record_with_exa};
 use crate::grpc::intervals::{
     DateIntervalStep, generate_interval_steps, inject_timeframe_into_prompt, parse_flexible_date,
     parse_interval,
@@ -37,6 +37,8 @@ struct LlmStepOverrides<'a> {
     enable_grounding: bool,
     thinking_level: Option<&'a str>,
     base_url: Option<&'a str>,
+    enable_exa: bool,
+    exa_api_key: Option<&'a str>,
 }
 
 #[derive(Clone)]
@@ -206,7 +208,7 @@ impl TablePopulatorServiceImpl {
             "PopulateTableInterval starting step"
         );
 
-        let records = match extract_table_data(
+        let records = match extract_table_data_with_exa(
             &self.config,
             &prompt,
             table_name,
@@ -219,6 +221,8 @@ impl TablePopulatorServiceImpl {
             overrides.thinking_level,
             overrides.base_url,
             &[],
+            overrides.enable_exa,
+            overrides.exa_api_key,
         )
         .await
         {
@@ -495,7 +499,7 @@ impl TablePopulatorServiceImpl {
         let record_json =
             serde_json::to_string_pretty(record).unwrap_or_else(|_| record.to_string());
 
-        let outcome = match fact_check_record(
+        let outcome = match fact_check_record_with_exa(
             &self.config,
             &record_json,
             table_name,
@@ -505,6 +509,8 @@ impl TablePopulatorServiceImpl {
             overrides.preamble,
             overrides.thinking_level,
             overrides.base_url,
+            overrides.enable_exa,
+            overrides.exa_api_key,
         )
         .await
         {
@@ -748,15 +754,32 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         // 4. Extract structured data using Rig / Gemini / Qwen / Local1 / Local2
         // Grounding defaults to false if S3 attachments were provided (unless explicitly requested), else true
         let enable_grounding = req.enable_grounding.unwrap_or(attachments.is_empty());
+        let enable_exa = req.enable_exa.unwrap_or_else(|| {
+            req.exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty())
+        });
+        if enable_exa
+            && self
+                .config
+                .resolve_exa_api_key(req.exa_api_key.as_deref())
+                .is_none()
+        {
+            return Err(Status::invalid_argument(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            ));
+        }
+
         tracing::info!(
             table = %table_name,
             provider = %effective_provider,
             model = %effective_model,
             grounding = enable_grounding,
+            exa = enable_exa,
             has_attachments = !attachments.is_empty(),
             "PopulateTable-Agent starting data extraction"
         );
-        let records = match extract_table_data(
+        let records = match extract_table_data_with_exa(
             &self.config,
             &effective_prompt,
             &table_name,
@@ -769,6 +792,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             req.thinking_level.as_deref(),
             req.base_url.as_deref(),
             &attachments,
+            enable_exa,
+            req.exa_api_key.as_deref(),
         )
         .await
         {
@@ -977,6 +1002,22 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
+        let enable_exa = req.enable_exa.unwrap_or_else(|| {
+            req.exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty())
+        });
+        if enable_exa
+            && self
+                .config
+                .resolve_exa_api_key(req.exa_api_key.as_deref())
+                .is_none()
+        {
+            return Err(Status::invalid_argument(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            ));
+        }
+
         let prepared = self
             .prepare_interval_run(&req, &prompt, &table_name)
             .await?;
@@ -989,6 +1030,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             enable_grounding: req.enable_grounding.unwrap_or(true),
             thinking_level: req.thinking_level.as_deref(),
             base_url: req.base_url.as_deref(),
+            enable_exa,
+            exa_api_key: req.exa_api_key.as_deref(),
         };
 
         let total_steps = prepared.steps.len();
@@ -1055,6 +1098,22 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let prompt = req.prompt.trim().to_string();
         let table_name = req.table_name.trim().to_string();
 
+        let enable_exa = req.enable_exa.unwrap_or_else(|| {
+            req.exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty())
+        });
+        if enable_exa
+            && self
+                .config
+                .resolve_exa_api_key(req.exa_api_key.as_deref())
+                .is_none()
+        {
+            return Err(Status::invalid_argument(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            ));
+        }
+
         let prepared = self
             .prepare_interval_run(&req, &prompt, &table_name)
             .await?;
@@ -1071,6 +1130,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 enable_grounding: req.enable_grounding.unwrap_or(true),
                 thinking_level: req.thinking_level.as_deref(),
                 base_url: req.base_url.as_deref(),
+                enable_exa,
+                exa_api_key: req.exa_api_key.as_deref(),
             };
 
             for (i, step) in prepared.steps.iter().enumerate() {
@@ -1098,9 +1159,25 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let req = request.into_inner();
         let table_name = req.table_name.trim().to_string();
 
+        let enable_exa = req.enable_exa.unwrap_or_else(|| {
+            req.exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty())
+        });
+        if enable_exa
+            && self
+                .config
+                .resolve_exa_api_key(req.exa_api_key.as_deref())
+                .is_none()
+        {
+            return Err(Status::invalid_argument(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            ));
+        }
+
         let (db, records) = self.fetch_records_for_fact_check(&req).await?;
         let total_found = records.len();
-        tracing::info!(table = %table_name, count = total_found, "Starting batch fact-check");
+        tracing::info!(table = %table_name, count = total_found, exa = enable_exa, "Starting batch fact-check");
 
         let update_db_status = req.update_db_status.unwrap_or(true);
         let overrides = LlmStepOverrides {
@@ -1111,6 +1188,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
             enable_grounding: true,
             thinking_level: req.thinking_level.as_deref(),
             base_url: req.base_url.as_deref(),
+            enable_exa,
+            exa_api_key: req.exa_api_key.as_deref(),
         };
 
         let mut results = Vec::with_capacity(total_found);
@@ -1176,6 +1255,22 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         let req = request.into_inner();
         let table_name = req.table_name.trim().to_string();
 
+        let enable_exa = req.enable_exa.unwrap_or_else(|| {
+            req.exa_api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty())
+        });
+        if enable_exa
+            && self
+                .config
+                .resolve_exa_api_key(req.exa_api_key.as_deref())
+                .is_none()
+        {
+            return Err(Status::invalid_argument(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            ));
+        }
+
         let (db, records) = self.fetch_records_for_fact_check(&req).await?;
         let (tx, rx) = tokio::sync::mpsc::channel(16);
 
@@ -1191,6 +1286,8 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
                 enable_grounding: true,
                 thinking_level: req.thinking_level.as_deref(),
                 base_url: req.base_url.as_deref(),
+                enable_exa,
+                exa_api_key: req.exa_api_key.as_deref(),
             };
 
             for (i, record) in records.iter().enumerate() {
@@ -1215,6 +1312,36 @@ impl TablePopulatorService for TablePopulatorServiceImpl {
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn populate_table_exa(
+        &self,
+        request: Request<PopulateTableRequest>,
+    ) -> Result<Response<PopulateTableResponse>, Status> {
+        let mut req = request.into_inner();
+        req.enable_exa = Some(true);
+        self.populate_table(Request::new(req)).await
+    }
+
+    async fn populate_table_interval_exa(
+        &self,
+        request: Request<PopulateTableIntervalRequest>,
+    ) -> Result<Response<PopulateTableIntervalResponse>, Status> {
+        let mut req = request.into_inner();
+        req.enable_exa = Some(true);
+        self.populate_table_interval(Request::new(req)).await
+    }
+
+    type PopulateTableIntervalExaStreamStream =
+        ReceiverStream<Result<IntervalIterationResult, Status>>;
+
+    async fn populate_table_interval_exa_stream(
+        &self,
+        request: Request<PopulateTableIntervalRequest>,
+    ) -> Result<Response<Self::PopulateTableIntervalExaStreamStream>, Status> {
+        let mut req = request.into_inner();
+        req.enable_exa = Some(true);
+        self.populate_table_interval_stream(Request::new(req)).await
     }
 }
 

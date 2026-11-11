@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod client;
+pub mod exa_tool;
 pub mod extractor;
 pub mod file_attachment;
 pub mod intervals;
@@ -15,7 +16,14 @@ pub use auth::{
     check_oauth_at_startup, create_auth_layer, discover_oidc_endpoints,
 };
 pub use client::{AgentGrpcClient, ClientAuth, connect_client, connect_client_with_auth};
-pub use extractor::{FactCheckOutcome, extract_table_data, fact_check_record, parse_json_response};
+pub use exa_tool::{
+    ExaContentsArgs, ExaContentsOutput, ExaContentsTool, ExaResultItem, ExaSearchArgs,
+    ExaSearchOutput, ExaSearchTool, ExaToolError, normalize_exa_date,
+};
+pub use extractor::{
+    FactCheckOutcome, extract_table_data, extract_table_data_with_exa, fact_check_record,
+    fact_check_record_with_exa, parse_json_response,
+};
 pub use file_attachment::{DocumentAttachment, prepare_document_attachment};
 pub use intervals::{
     DateIntervalStep, IntervalType, generate_interval_steps, inject_timeframe_into_prompt,

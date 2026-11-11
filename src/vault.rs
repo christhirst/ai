@@ -108,6 +108,13 @@ pub struct VaultKeysConfig {
     )]
     pub qwen_base_url: Vec<String>,
     #[serde(
+        default = "default_exa_api_key_keys",
+        alias = "exa_key",
+        alias = "exa",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub exa_api_key: Vec<String>,
+    #[serde(
         default = "default_db_password_keys",
         alias = "db_password",
         deserialize_with = "deserialize_string_or_vec"
@@ -168,6 +175,7 @@ impl Default for VaultKeysConfig {
             gemini_api_key: default_gemini_api_key_keys(),
             qwen_api_key: default_qwen_api_key_keys(),
             qwen_base_url: default_qwen_base_url_keys(),
+            exa_api_key: default_exa_api_key_keys(),
             ai_db_password: default_db_password_keys(),
             ai_db_username: default_db_username_keys(),
             ai_db_endpoint: default_db_endpoint_keys(),
@@ -204,6 +212,16 @@ pub fn default_qwen_base_url_keys() -> Vec<String> {
         "dashscope_url".to_string(),
         "QWEN_BASE_URL".to_string(),
         "DASHSCOPE_BASE_URL".to_string(),
+    ]
+}
+
+pub fn default_exa_api_key_keys() -> Vec<String> {
+    vec![
+        "exa_api_key".to_string(),
+        "exa_key".to_string(),
+        "exa".to_string(),
+        "EXA_API_KEY".to_string(),
+        "api_key_exa".to_string(),
     ]
 }
 

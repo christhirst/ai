@@ -1,4 +1,5 @@
 use crate::config::{AppConfig, ModelProvider};
+use crate::grpc::exa_tool::{ExaContentsTool, ExaSearchTool};
 use crate::grpc::file_attachment::DocumentAttachment;
 use rig::completion::Message;
 use rig::completion::message::{Document, DocumentMediaType, DocumentSourceKind, UserContent};
@@ -218,7 +219,59 @@ pub async fn extract_table_data(
     base_url_override: Option<&str>,
     attachments: &[DocumentAttachment],
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    extract_table_data_with_exa(
+        config,
+        prompt,
+        table_name,
+        fields,
+        provider_override,
+        model_override,
+        temperature_override,
+        preamble_override,
+        enable_grounding,
+        thinking_level_override,
+        base_url_override,
+        attachments,
+        false,
+        None,
+    )
+    .await
+}
+
+/// Extracts structured data from Gemini / Qwen / Local1 / Local2 with optional Exa.ai research tools.
+#[allow(clippy::too_many_arguments)]
+pub async fn extract_table_data_with_exa(
+    config: &AppConfig,
+    prompt: &str,
+    table_name: &str,
+    fields: &[String],
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+    temperature_override: Option<f64>,
+    preamble_override: Option<&str>,
+    enable_grounding: bool,
+    thinking_level_override: Option<&str>,
+    base_url_override: Option<&str>,
+    attachments: &[DocumentAttachment],
+    enable_exa: bool,
+    exa_api_key_override: Option<&str>,
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let (provider, model) = resolve_provider_and_model(config, provider_override, model_override)?;
+
+    let exa_tools = if enable_exa {
+        let exa_key = config
+            .resolve_exa_api_key(exa_api_key_override)
+            .ok_or(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            )?;
+        let exa_base_url = config.resolve_exa_base_url();
+        Some((
+            ExaSearchTool::new(exa_key.clone(), exa_base_url.clone()),
+            ExaContentsTool::new(exa_key, exa_base_url),
+        ))
+    } else {
+        None
+    };
 
     let effective_prompt = build_effective_prompt_with_text_attachments(prompt, attachments);
 
@@ -229,8 +282,18 @@ pub async fn extract_table_data(
         .or(config.preamble.as_deref())
         .unwrap_or("You are a helpful structured data extraction assistant.");
 
+    let exa_instructions = if enable_exa {
+        "\n\nEXA.AI RESEARCH TOOLS:\n\
+        You have access to `exa_search` and `exa_get_contents` tools for real-time web research:\n\
+        1. Call `exa_search` with targeted queries (and optional `start_published_date` / `end_published_date` in YYYY-MM-DD format) to discover relevant primary sources.\n\
+        2. Optionally call `exa_get_contents` on promising URLs when you need full article text.\n\
+        3. Record the exact search query used in `discovery_query` (if present in the schema) and verified URLs in `url`."
+    } else {
+        ""
+    };
+
     let system_instructions = format!(
-        "{base_preamble}\n\n\
+        "{base_preamble}{exa_instructions}\n\n\
         TASK:\n\
         You must perform research and extract factual, high-quality data according to the user request for table '{table_name}'.\n\
         \n\
@@ -262,15 +325,19 @@ pub async fn extract_table_data(
             let client = gemini::Client::new(&config.gemini_api_key)?;
             let mut builder = client.agent(&model).preamble(&system_instructions);
 
+            // When Exa tools are registered, disable native google_search tool to avoid Gemini API tool conflict
+            let use_native_grounding = enable_grounding && exa_tools.is_none();
+
             let normalized_thinking_level = normalize_thinking_level(thinking_level_override)?;
-            let effective_thinking_level = match (normalized_thinking_level, enable_grounding) {
-                (Some(level), _) => Some(level),
-                (None, true) => Some("low".to_string()),
-                (None, false) => None,
-            };
+            let effective_thinking_level =
+                match (normalized_thinking_level, enable_grounding || enable_exa) {
+                    (Some(level), _) => Some(level),
+                    (None, true) => Some("low".to_string()),
+                    (None, false) => None,
+                };
 
             if let Some(params) =
-                build_gemini_additional_params(enable_grounding, effective_thinking_level)
+                build_gemini_additional_params(use_native_grounding, effective_thinking_level)
             {
                 builder = builder.additional_params(params);
             }
@@ -279,12 +346,21 @@ pub async fn extract_table_data(
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = "gemini",
                 model = %model,
                 table = %table_name,
+                exa = enable_exa,
                 has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from Gemini agent"
             );
@@ -308,7 +384,7 @@ pub async fn extract_table_data(
 
             let mut builder = client.agent(&model).preamble(&system_instructions);
 
-            if enable_grounding {
+            if enable_grounding && exa_tools.is_none() {
                 builder = builder.additional_params(json!({
                     "enable_search": true,
                     "search_options": {
@@ -323,7 +399,15 @@ pub async fn extract_table_data(
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = "qwen",
@@ -331,6 +415,7 @@ pub async fn extract_table_data(
                 base_url = %effective_base_url,
                 table = %table_name,
                 grounding = enable_grounding,
+                exa = enable_exa,
                 has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from Qwen agent"
             );
@@ -352,13 +437,22 @@ pub async fn extract_table_data(
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = %provider,
                 model = %model,
                 base_url = %effective_base_url,
                 table = %table_name,
+                exa = enable_exa,
                 has_attachment = !attachments.is_empty(),
                 "PopulateTable-Agent: requesting structured data extraction from local agent"
             );
@@ -373,6 +467,7 @@ pub async fn extract_table_data(
         provider = %provider,
         count = parsed_records.len(),
         table = %table_name,
+        exa = enable_exa,
         "PopulateTable-Agent: successfully extracted structured records"
     );
 
@@ -612,7 +707,53 @@ pub async fn fact_check_record(
     thinking_level_override: Option<&str>,
     base_url_override: Option<&str>,
 ) -> Result<FactCheckOutcome, Box<dyn std::error::Error>> {
+    fact_check_record_with_exa(
+        config,
+        record_json,
+        table_name,
+        provider_override,
+        model_override,
+        temperature_override,
+        preamble_override,
+        thinking_level_override,
+        base_url_override,
+        false,
+        None,
+    )
+    .await
+}
+
+/// Fact-checks a single database record by querying Gemini or Qwen with optional Exa.ai research tools.
+#[allow(clippy::too_many_arguments)]
+pub async fn fact_check_record_with_exa(
+    config: &AppConfig,
+    record_json: &str,
+    table_name: &str,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+    temperature_override: Option<f64>,
+    preamble_override: Option<&str>,
+    thinking_level_override: Option<&str>,
+    base_url_override: Option<&str>,
+    enable_exa: bool,
+    exa_api_key_override: Option<&str>,
+) -> Result<FactCheckOutcome, Box<dyn std::error::Error>> {
     let (provider, model) = resolve_provider_and_model(config, provider_override, model_override)?;
+
+    let exa_tools = if enable_exa {
+        let exa_key = config
+            .resolve_exa_api_key(exa_api_key_override)
+            .ok_or(
+                "Exa API key is not configured. Please set EXA_API_KEY, exa_api_key in config.toml, OpenBao/Vault, or pass exa_api_key in the gRPC request.",
+            )?;
+        let exa_base_url = config.resolve_exa_base_url();
+        Some((
+            ExaSearchTool::new(exa_key.clone(), exa_base_url.clone()),
+            ExaContentsTool::new(exa_key, exa_base_url),
+        ))
+    } else {
+        None
+    };
 
     let base_preamble = preamble_override
         .or(config.preamble.as_deref())
@@ -673,8 +814,9 @@ pub async fn fact_check_record(
             let effective_thinking_level =
                 normalized_thinking_level.unwrap_or_else(|| "low".to_string());
 
+            let use_native_grounding = exa_tools.is_none();
             if let Some(params) =
-                build_gemini_additional_params(true, Some(effective_thinking_level))
+                build_gemini_additional_params(use_native_grounding, Some(effective_thinking_level))
             {
                 builder = builder.additional_params(params);
             }
@@ -683,12 +825,21 @@ pub async fn fact_check_record(
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = "gemini",
                 model = %model,
                 table = %table_name,
+                exa = enable_exa,
                 "FactCheck-Agent: requesting factual verification from Gemini agent"
             );
 
@@ -709,10 +860,10 @@ pub async fn fact_check_record(
                 .base_url(effective_base_url)
                 .build()?;
 
-            let mut builder = client
-                .agent(&model)
-                .preamble(&system_instructions)
-                .additional_params(json!({
+            let mut builder = client.agent(&model).preamble(&system_instructions);
+
+            if exa_tools.is_none() {
+                builder = builder.additional_params(json!({
                     "enable_search": true,
                     "search_options": {
                         "forced_search": true,
@@ -720,18 +871,28 @@ pub async fn fact_check_record(
                         "enable_source": true
                     }
                 }));
+            }
 
             if let Some(t) = temp {
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = "qwen",
                 model = %model,
                 base_url = %effective_base_url,
                 table = %table_name,
+                exa = enable_exa,
                 "FactCheck-Agent: requesting factual verification from Qwen agent"
             );
 
@@ -752,13 +913,22 @@ pub async fn fact_check_record(
                 builder = builder.temperature(t);
             }
 
-            let agent = builder.build();
+            let agent = if let Some((search_tool, contents_tool)) = exa_tools {
+                builder
+                    .default_max_turns(10)
+                    .tool(search_tool)
+                    .tool(contents_tool)
+                    .build()
+            } else {
+                builder.build()
+            };
 
             tracing::info!(
                 provider = %provider,
                 model = %model,
                 base_url = %effective_base_url,
                 table = %table_name,
+                exa = enable_exa,
                 "FactCheck-Agent: requesting factual verification from local agent"
             );
 

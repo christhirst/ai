@@ -27,6 +27,15 @@ service TablePopulatorService {
 
   // Streaming variant that emits each fact-check result as it completes.
   rpc FactCheckEntriesStream (FactCheckEntriesRequest) returns (stream FactCheckResult);
+
+  // Populates a SurrealDB table using a research agent (Gemini or Qwen) equipped with Exa.ai search & content tools.
+  rpc PopulateTableExa (PopulateTableRequest) returns (PopulateTableResponse);
+
+  // Populates a table iteratively over a date range and interval using an LLM research agent equipped with Exa.ai tools.
+  rpc PopulateTableIntervalExa (PopulateTableIntervalRequest) returns (PopulateTableIntervalResponse);
+
+  // Streaming variant of PopulateTableIntervalExa that streams each iteration result as it completes.
+  rpc PopulateTableIntervalExaStream (PopulateTableIntervalRequest) returns (stream IntervalIterationResult);
 }
 
 message PopulateTableRequest {
@@ -66,6 +75,10 @@ message PopulateTableRequest {
   repeated string file_names = 15;
   // Optional fallback S3 bucket name (used when file_names contains bare object keys instead of full s3:// URIs)
   optional string s3_bucket = 16;
+  // Optional Exa.ai API key override (overrides exa_api_key in config.toml / Vault)
+  optional string exa_api_key = 17;
+  // Whether to equip the research agent with Exa.ai search and content tools (automatically true on PopulateTableExa)
+  optional bool enable_exa = 18;
 }
 
 message PopulateTableResponse {
@@ -154,6 +167,10 @@ message PopulateTableIntervalRequest {
   repeated string file_names = 18;
   // Optional fallback S3 bucket name
   optional string s3_bucket = 19;
+  // Optional Exa.ai API key override (overrides exa_api_key in config.toml / Vault)
+  optional string exa_api_key = 20;
+  // Whether to equip the research agent with Exa.ai search and content tools (automatically true on PopulateTableIntervalExa)
+  optional bool enable_exa = 21;
 }
 
 message IntervalIterationResult {
@@ -211,6 +228,10 @@ message FactCheckEntriesRequest {
   optional string thinking_level = 15;
   // Optional LLM base URL override
   optional string base_url = 16;
+  // Optional Exa.ai API key override (overrides exa_api_key in config.toml / Vault)
+  optional string exa_api_key = 17;
+  // Whether to equip the fact-checking agent with Exa.ai search and content tools
+  optional bool enable_exa = 18;
 }
 
 message FactCheckResult {

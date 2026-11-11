@@ -335,6 +335,8 @@ async fn test_populate_table_request_receipt_and_validation() {
             s3_connection: None,
             file_names: Vec::new(),
             s3_bucket: None,
+            exa_api_key: None,
+            enable_exa: None,
         }))
         .await
         .unwrap_err();
@@ -363,6 +365,8 @@ async fn test_populate_table_request_receipt_and_validation() {
             s3_connection: None,
             file_names: Vec::new(),
             s3_bucket: None,
+            exa_api_key: None,
+            enable_exa: None,
         }))
         .await
         .unwrap_err();
@@ -617,6 +621,8 @@ async fn test_populate_table_interval_validation_and_stepping() {
             s3_connection: None,
             file_names: Vec::new(),
             s3_bucket: None,
+            exa_api_key: None,
+            enable_exa: None,
         }))
         .await
         .unwrap_err();
@@ -645,6 +651,8 @@ async fn test_populate_table_interval_validation_and_stepping() {
             s3_connection: None,
             file_names: Vec::new(),
             s3_bucket: None,
+            exa_api_key: None,
+            enable_exa: None,
         }))
         .await
         .unwrap_err();
@@ -1730,6 +1738,8 @@ async fn test_grpc_populate_table_empty_prompt_allowed_with_attachment() {
             s3_connection: None,
             file_names: vec!["s3://mock-bucket/reports/2026.csv".to_string()],
             s3_bucket: None,
+            exa_api_key: None,
+            enable_exa: None,
         }))
         .await
         .unwrap_err();
@@ -1906,4 +1916,252 @@ fn test_build_effective_prompt_with_text_attachments_no_duplication() {
         !prompt.contains("scan.pdf"),
         "PDF attachments are handled separately via multimodal content"
     );
+}
+
+#[tokio::test]
+async fn test_populate_table_exa_api_key_validation_and_override() {
+    let db = init_memory_db("exa_ns", "exa_db")
+        .await
+        .expect("Failed to init db");
+    let app_db = Arc::new(AppDb::Local(db));
+
+    // Config without exa_api_key and without gemini/qwen api keys
+    let config = Arc::new(AppConfig {
+        gemini_api_key: "".to_string(),
+        qwen_api_key: "".to_string(),
+        exa_api_key: "".to_string(),
+        model: "gemini-3.7-flash".to_string(),
+        ..Default::default()
+    });
+
+    let service = TablePopulatorServiceImpl::new(config, app_db.clone());
+
+    // 1. Calling PopulateTableExa when neither config nor request has exa_api_key returns InvalidArgument
+    let err = service
+        .populate_table_exa(Request::new(PopulateTableRequest {
+            prompt: "Research Berlin incidents".to_string(),
+            table_name: "incident_source".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Exa API key is not configured"),
+        "Expected Exa API key missing error, got: {}",
+        err.message()
+    );
+
+    // 2. Calling PopulateTableIntervalExa when neither config nor request has exa_api_key returns InvalidArgument
+    let err_interval = service
+        .populate_table_interval_exa(Request::new(PopulateTableIntervalRequest {
+            prompt: "Research Berlin incidents {{timeframe}}".to_string(),
+            table_name: "incident_source".to_string(),
+            interval: "monthly".to_string(),
+            start_date: "2000-01".to_string(),
+            end_date: "2000-02".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err_interval.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err_interval
+            .message()
+            .contains("Exa API key is not configured"),
+        "Expected Exa API key missing error, got: {}",
+        err_interval.message()
+    );
+
+    // 3. Passing exa_api_key in the RPC request satisfies Exa key validation for both Gemini and Qwen
+    // (subsequently fails at LLM key check since gemini_api_key / qwen_api_key is empty in this unit test)
+    let err_with_override_gemini = service
+        .populate_table_exa(Request::new(PopulateTableRequest {
+            prompt: "Research Berlin incidents".to_string(),
+            table_name: "incident_source".to_string(),
+            provider: Some("gemini".to_string()),
+            exa_api_key: Some("req_override_exa_key_123".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err_with_override_gemini.code(), tonic::Code::Internal);
+    assert!(
+        err_with_override_gemini
+            .message()
+            .contains("Gemini API key is not configured"),
+        "Exa key override should pass validation and reach Gemini provider check, got: {}",
+        err_with_override_gemini.message()
+    );
+
+    let err_with_override_qwen = service
+        .populate_table_exa(Request::new(PopulateTableRequest {
+            prompt: "Research Berlin incidents".to_string(),
+            table_name: "incident_source".to_string(),
+            provider: Some("qwen".to_string()),
+            exa_api_key: Some("req_override_exa_key_123".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err_with_override_qwen.code(), tonic::Code::Internal);
+    assert!(
+        err_with_override_qwen
+            .message()
+            .contains("Qwen API key is not configured"),
+        "Exa key override should pass validation and reach Qwen provider check, got: {}",
+        err_with_override_qwen.message()
+    );
+}
+
+#[tokio::test]
+async fn test_populate_table_exa_end_to_end_tool_call_with_qwen() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // 1. Start mock Exa.ai HTTP server
+    let exa_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let exa_addr = exa_listener.local_addr().unwrap();
+
+    let exa_server = tokio::spawn(async move {
+        let (mut stream, _) = exa_listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = stream.read(&mut buf).await.unwrap();
+        let req_str = String::from_utf8_lossy(&buf[..n]);
+
+        assert!(
+            req_str.to_lowercase().contains("x-api-key: rpc-override-exa-key-777"),
+            "Expected overridden Exa API key header, got: {req_str}"
+        );
+
+        let body = r#"{"results":[{"title":"Exa Crime Report Berlin","url":"https://exa-news.de/berlin-2000","publishedDate":"2000-04-15T00:00:00.000Z","text":"Confirmed incident in Berlin on 2000-04-15.","highlights":["Confirmed incident in Berlin"]}]}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(resp.as_bytes()).await.unwrap();
+    });
+
+    // 2. Start mock Qwen (OpenAI-compatible) HTTP server that performs 1 tool call turn + 1 final response turn
+    let qwen_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let qwen_addr = qwen_listener.local_addr().unwrap();
+
+    let qwen_server = tokio::spawn(async move {
+        for turn in 0..2 {
+            let (mut stream, _) = qwen_listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 16384];
+            let n = stream.read(&mut buf).await.unwrap();
+            let req_str = String::from_utf8_lossy(&buf[..n]);
+
+            let body = if turn == 0 {
+                // Verify Exa tools are advertised to the model
+                assert!(
+                    req_str.contains("exa_search") && req_str.contains("exa_get_contents"),
+                    "Expected exa_search and exa_get_contents in tool definitions: {req_str}"
+                );
+                r#"{
+                    "id": "chatcmpl-turn1",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "qwen-plus",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": "call_exa_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exa_search",
+                                    "arguments": "{\"query\":\"Berlin incident April 2000\",\"num_results\":5}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70}
+                }"#
+            } else {
+                // Turn 2: verify tool output from Exa was returned in conversation history
+                assert!(
+                    req_str.contains("https://exa-news.de/berlin-2000"),
+                    "Expected Exa tool output in second turn request: {req_str}"
+                );
+                r#"{
+                    "id": "chatcmpl-turn2",
+                    "object": "chat.completion",
+                    "created": 1700000001,
+                    "model": "qwen-plus",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "[{\"url\":\"https://exa-news.de/berlin-2000\",\"discovery_query\":\"Berlin incident April 2000\",\"incident_date\":\"2000-04-15\",\"raw_text\":\"Exa Crime Report Berlin: Confirmed incident in Berlin on 2000-04-15.\"}]"
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 120, "completion_tokens": 40, "total_tokens": 160}
+                }"#
+            };
+
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        }
+    });
+
+    let db = init_memory_db("exa_e2e_ns", "exa_e2e_db")
+        .await
+        .expect("Failed to init db");
+    let app_db = Arc::new(AppDb::Local(db));
+
+    let config = Arc::new(AppConfig {
+        provider: ModelProvider::Qwen,
+        qwen_api_key: "mock-qwen-api-key".to_string(),
+        qwen_base_url: format!("http://{qwen_addr}/v1"),
+        exa_api_key: "config-default-exa-key".to_string(),
+        exa_base_url: format!("http://{exa_addr}"),
+        db: DatabaseConfig {
+            endpoint: "mem://".to_string(),
+            namespace: "exa_e2e_ns".to_string(),
+            database: "exa_e2e_db".to_string(),
+            username: None,
+            password: None,
+        },
+        ..Default::default()
+    });
+
+    let service = TablePopulatorServiceImpl::new(config, app_db);
+
+    let ddl = "DEFINE TABLE incident_source SCHEMAFULL; \
+               DEFINE FIELD url ON TABLE incident_source TYPE string; \
+               DEFINE FIELD discovery_query ON TABLE incident_source TYPE string; \
+               DEFINE FIELD incident_date ON TABLE incident_source TYPE string; \
+               DEFINE FIELD raw_text ON TABLE incident_source TYPE string;";
+
+    let resp = service
+        .populate_table_exa(Request::new(PopulateTableRequest {
+            prompt: "Find Berlin incidents in April 2000".to_string(),
+            table_name: "incident_source".to_string(),
+            define_table_sql: Some(ddl.to_string()),
+            provider: Some("qwen".to_string()),
+            model: Some("qwen-plus".to_string()),
+            exa_api_key: Some("rpc-override-exa-key-777".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect("PopulateTableExa should succeed")
+        .into_inner();
+
+    assert!(resp.success);
+    assert_eq!(resp.records_count, 1);
+    assert!(resp.data_json.contains("https://exa-news.de/berlin-2000"));
+
+    exa_server.await.unwrap();
+    qwen_server.await.unwrap();
 }
